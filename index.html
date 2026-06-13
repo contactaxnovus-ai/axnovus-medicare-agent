@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Axnovus Care Agent</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="rail" aria-label="Care workflow">
+        <a class="brand" href="https://www.axnovus.com" target="_blank" rel="noreferrer">
+          <span class="brand-mark">AX</span>
+          <span>
+            <strong>AXNOVUS</strong>
+            <small>Care Agent</small>
+          </span>
+        </a>
+
+        <nav class="care-path" aria-label="Patient case path">
+          <div class="path-title">
+            <p class="eyebrow">Care path</p>
+            <h2>One patient case moves through these stages.</h2>
+          </div>
+          <button class="path-step is-active" data-view="intake" data-stage="intake">
+            <span>1</span>
+            <strong>Intake</strong>
+            <small>Symptoms, voice, and patient details</small>
+          </button>
+          <button class="path-step" data-view="triage" data-stage="triage">
+            <span>2</span>
+            <strong>Triage</strong>
+            <small>Possible conditions and confidence</small>
+          </button>
+          <button class="path-step" data-view="followup" data-stage="followup">
+            <span>3</span>
+            <strong>Follow-up</strong>
+            <small>Answers that narrow the case</small>
+          </button>
+          <button class="path-step" data-view="routing" data-stage="routing">
+            <span>4</span>
+            <strong>Routing</strong>
+            <small>Specialist or emergency desk</small>
+          </button>
+        </nav>
+
+        <section class="rail-panel">
+          <p class="eyebrow">Patient support</p>
+          <h2>Hindi voice intake, symptom review, and hospital department routing.</h2>
+          <p>Designed for front desk, triage, and OPD coordination teams.</p>
+        </section>
+      </aside>
+
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Hospital triage desk</p>
+            <h1>Patient symptom intake and specialist routing</h1>
+          </div>
+          <div class="status-pill" id="riskBadge">Awaiting symptoms</div>
+        </header>
+
+        <section class="notice" role="note">
+          <strong>Clinical safety:</strong>
+          This tool supports triage and routing. It is not a diagnosis, prescription, or emergency service.
+          For severe symptoms, call local emergency services or visit the nearest emergency department.
+        </section>
+
+        <div class="grid">
+          <section class="panel panel-large" data-panel="intake">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Step 1</p>
+                <h2>Patient intake</h2>
+              </div>
+              <button class="icon-button" id="voiceButton" type="button" aria-label="Start Hindi voice input" title="Hindi voice input">
+                <span id="micIcon">Mic</span>
+              </button>
+            </div>
+
+            <label class="field-label" for="symptomInput">Symptoms or complaint</label>
+            <textarea id="symptomInput" rows="7" placeholder="Example: Fever for 3 days, body pain, headache, cough...&#10;उदाहरण: तीन दिन से बुखार, खांसी, बदन दर्द..."></textarea>
+
+            <div class="quick-symptoms" id="quickSymptoms" aria-label="Common symptoms"></div>
+
+            <div class="form-row">
+              <label>
+                Age
+                <input id="ageInput" type="number" min="0" max="120" value="32" />
+              </label>
+              <label>
+                Sex
+                <select id="sexInput">
+                  <option>Female</option>
+                  <option selected>Male</option>
+                  <option>Other</option>
+                </select>
+              </label>
+              <label>
+                City / State
+                <input id="locationInput" type="text" value="Delhi, India" />
+              </label>
+            </div>
+
+            <input id="triageMode" type="hidden" value="llm" />
+            <input id="llmEndpoint" type="hidden" value="/api/triage" />
+
+            <div class="agent-options">
+              <label>
+                Assessment profile
+                <select id="modelSelect"></select>
+              </label>
+            </div>
+
+            <div class="action-row">
+              <button class="primary-action" id="analyzeButton" type="button">Run care triage</button>
+              <button class="secondary-action" id="clearButton" type="button">New case</button>
+            </div>
+            <div class="agent-status" id="agentStatus">Ready for a new patient case.</div>
+          </section>
+
+          <section class="panel" data-panel="triage">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Step 2</p>
+                <h2>Possible conditions</h2>
+              </div>
+            </div>
+            <div id="conditionList" class="stack empty-state">Step 1 is waiting for symptoms and patient details.</div>
+          </section>
+
+          <section class="panel" data-panel="followup">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Step 3</p>
+                <h2>Follow-up questions</h2>
+              </div>
+            </div>
+            <div id="questionList" class="questions empty-state">Follow-up questions appear after triage.</div>
+            <button class="primary-action refine-action" id="refineButton" type="button" disabled>Refine with answers</button>
+          </section>
+
+          <section class="panel" data-panel="routing">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Step 4</p>
+                <h2>Doctor routing</h2>
+              </div>
+            </div>
+            <div id="doctorPanel" class="stack empty-state">Specialist routing appears after triage.</div>
+          </section>
+
+          <section class="panel panel-wide" data-panel="feedback">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Case review</p>
+                <h2>Review outcome</h2>
+              </div>
+            </div>
+            <div class="feedback-grid">
+              <div class="feedback-box">
+                <label class="consent-row">
+                  <input id="saveConsent" type="checkbox" />
+                  Save this reviewed case on this device
+                </label>
+                <label class="field-label" for="feedbackNote">Review note</label>
+                <textarea id="feedbackNote" rows="3" placeholder="Optional review note"></textarea>
+                <div class="action-row feedback-actions">
+                  <button class="primary-action" id="thumbsUpButton" type="button" disabled>Looks correct</button>
+                  <button class="secondary-action" id="thumbsDownButton" type="button" disabled>Needs review</button>
+                </div>
+              </div>
+              <div class="dataset-box">
+                <strong>Reviewed cases</strong>
+                <p id="datasetStats">No reviewed cases saved yet.</p>
+                <div class="action-row feedback-actions">
+                  <button class="secondary-action" id="exportDatasetButton" type="button">Export</button>
+                  <button class="secondary-action" id="clearDatasetButton" type="button">Clear data</button>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <script src="config/healthcare.config.js"></script>
+    <script src="js/case-store.js"></script>
+    <script src="js/triage-engine.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

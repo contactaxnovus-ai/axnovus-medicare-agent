@@ -17,7 +17,7 @@ window.TRIAGE_APP_CONFIG = {
     ],
     task: "india_healthcare_symptom_triage",
     safetyInstruction:
-      "Return possible conditions, follow-up questions, red flags, and specialist routing. Do not diagnose, prescribe, or replace a clinician.",
+      "Return possible conditions, case-specific follow-up questions, red flags, and specialist routing. Use symptoms, duration, demographics, and uploaded report text. Do not diagnose, prescribe, or replace a clinician.",
   },
   feedback: {
     storageKey: "axnovus-care-agent-feedback-v1",

@@ -34,7 +34,8 @@ window.createTriageEngine = function createTriageEngine(config, hooks = {}) {
 
   function localProvider(context) {
     const followupText = (context.followupAnswers || []).map((item) => `${item.question} ${item.answer}`).join(" ");
-    const extracted = extractSignals(`${context.symptoms} ${followupText}`);
+    const reportText = (context.reports || []).map((report) => `${report.name} ${report.text || ""}`).join(" ");
+    const extracted = extractSignals(`${context.symptoms} ${followupText} ${reportText}`);
     return {
       provider: "rules",
       extractedSymptoms: extracted,
@@ -90,7 +91,7 @@ window.createTriageEngine = function createTriageEngine(config, hooks = {}) {
       return {
         provider: "llm",
         extractedSymptoms: Array.from(new Set([...local.extractedSymptoms, ...llm.extractedSymptoms])),
-        possibleConditions: normalizeConditions(llm.possibleConditions, local.possibleConditions),
+        possibleConditions: normalizeConditions(llm.possibleConditions, local.possibleConditions, true),
         urgent: mergeUrgency(local.urgent, llm.urgent),
       };
     } catch (error) {
@@ -105,7 +106,7 @@ window.createTriageEngine = function createTriageEngine(config, hooks = {}) {
     }
   }
 
-  function normalizeConditions(llmConditions, fallbackConditions) {
+  function normalizeConditions(llmConditions, fallbackConditions, llmPrimary = false) {
     const normalized = (llmConditions || [])
       .filter((condition) => condition && condition.name && (condition.specialty || condition.route))
       .map((condition) => ({
@@ -115,6 +116,7 @@ window.createTriageEngine = function createTriageEngine(config, hooks = {}) {
         hits: Array.isArray(condition.hits) ? condition.hits.map(String).slice(0, 6) : [],
         questions: Array.isArray(condition.questions) ? condition.questions.map(String).slice(0, 4) : [],
         nextStep: String(condition.nextStep || "Recommend clinician review before treatment decisions."),
+        questionSource: llmPrimary ? "llm" : "local",
       }))
       .slice(0, 5);
 

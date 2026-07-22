@@ -106,6 +106,8 @@ async function handleTriage(req, res) {
         "You do not diagnose, prescribe, or replace a clinician.",
         "Understand English, Hindi, Hinglish, and transliterated Hindi symptom descriptions.",
         "First identify emergency red flags, then return possible conditions, follow-up questions, and specialist routing.",
+        "Follow-up questions must be specific to the patient's described symptoms, duration, demographics, uploaded report data, and possible conditions.",
+        "Do not reuse a generic fever question set when symptoms, reports, or duration point to a different or more specific condition.",
         "Keep recommendations conservative and require clinician review.",
       ].join(" "),
       input: [
@@ -117,6 +119,7 @@ async function handleTriage(req, res) {
               text: JSON.stringify({
                 symptoms: context.symptoms || "",
                 followupAnswers: context.followupAnswers || [],
+                reports: context.reports || [],
                 age: context.age || null,
                 sex: context.sex || "",
                 location: context.location || "",

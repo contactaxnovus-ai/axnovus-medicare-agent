@@ -10,7 +10,34 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <main class="app-shell">
+    <section class="login-screen" id="loginScreen">
+      <div class="login-brand">
+        <span class="brand-mark">AX</span>
+        <div>
+          <strong>AXNOVUS</strong>
+          <span>Care Platform</span>
+        </div>
+      </div>
+      <div class="login-grid single-login">
+        <article class="login-card">
+          <p class="eyebrow">Secure access</p>
+          <h1>Sign in to continue</h1>
+          <p>Enter a user ID and PIN. The workspace opens according to the role assigned to that user.</p>
+          <label class="field-label" for="loginId">User ID</label>
+          <input id="loginId" type="text" placeholder="PAT-1001 or DOC-DEL-01" />
+          <label class="field-label" for="loginPin">PIN</label>
+          <input id="loginPin" type="password" placeholder="Demo PIN" />
+          <button class="primary-action" id="loginButton" type="button">Sign in</button>
+          <div class="quick-login">
+            <button class="chip" type="button" data-demo-login="patient">Use patient demo</button>
+            <button class="chip" type="button" data-demo-login="doctor">Use doctor demo</button>
+          </div>
+          <div class="agent-status" id="loginStatus">Demo users: PAT-1001 / 1234, DOC-DEL-01 / 4321</div>
+        </article>
+      </div>
+    </section>
+
+    <main class="app-shell is-hidden" id="appShell">
       <aside class="rail" aria-label="Care workflow">
         <a class="brand" href="https://www.axnovus.com" target="_blank" rel="noreferrer">
           <span class="brand-mark">AX</span>
@@ -20,10 +47,15 @@
           </span>
         </a>
 
-        <nav class="care-path" aria-label="Patient case path">
+        <div class="role-switch session-switch" aria-label="Workspace session">
+          <div class="session-label" id="sessionLabel">Signed in</div>
+          <button class="role-button" id="logoutButton" type="button">Logout</button>
+        </div>
+
+        <nav class="care-path patient-care-path" aria-label="Patient case path">
           <div class="path-title">
             <p class="eyebrow">Care path</p>
-            <h2>One patient case moves through these stages.</h2>
+            <h2>Complete each step to unlock the next one.</h2>
           </div>
           <button class="path-step is-active" data-view="intake" data-stage="intake">
             <span>1</span>
@@ -45,20 +77,47 @@
             <strong>Routing</strong>
             <small>Specialist or emergency desk</small>
           </button>
+          <button class="path-step" data-view="appointments" data-stage="appointments">
+            <span>5</span>
+            <strong>Booking</strong>
+            <small>Hospital, doctor, and slot</small>
+          </button>
+          <button class="path-step" data-view="treatment" data-stage="treatment">
+            <span>6</span>
+            <strong>Treatment</strong>
+            <small>Prescription, tests, medicines</small>
+          </button>
+        </nav>
+
+        <nav class="care-path doctor-care-path is-hidden" aria-label="Doctor workspace path">
+          <div class="path-title">
+            <p class="eyebrow">Doctor desk</p>
+            <h2>Review booked cases and complete the visit record.</h2>
+          </div>
+          <button class="path-step is-active" data-view="doctor">
+            <span>1</span>
+            <strong>Appointments</strong>
+            <small>Booked patients</small>
+          </button>
+          <button class="path-step" data-view="prescription">
+            <span>2</span>
+            <strong>Treatment</strong>
+            <small>Notes, reports, prescription</small>
+          </button>
         </nav>
 
         <section class="rail-panel">
-          <p class="eyebrow">Patient support</p>
-          <h2>Hindi voice intake, symptom review, and hospital department routing.</h2>
-          <p>Designed for front desk, triage, and OPD coordination teams.</p>
+          <p class="eyebrow">Guided flow</p>
+          <h2>Patient intake, appointment booking, doctor review, and prescription support.</h2>
+          <p>Use Patient view for intake and booking. Use Doctor view after the patient has booked a slot.</p>
         </section>
       </aside>
 
       <section class="workspace">
         <header class="topbar">
           <div>
-            <p class="eyebrow">Hospital triage desk</p>
-            <h1>Patient symptom intake and specialist routing</h1>
+            <p class="eyebrow" id="workspaceEyebrow">Patient view</p>
+            <h1 id="workspaceTitle">Start a patient case</h1>
           </div>
           <div class="status-pill" id="riskBadge">Awaiting symptoms</div>
         </header>
@@ -70,7 +129,7 @@
         </section>
 
         <div class="grid">
-          <section class="panel panel-large" data-panel="intake">
+          <section class="panel panel-large patient-panel step-panel" data-panel="intake" data-stage-panel="intake">
             <div class="panel-head">
               <div>
                 <p class="eyebrow">Step 1</p>
@@ -80,6 +139,7 @@
                 <span id="micIcon">Mic</span>
               </button>
             </div>
+            <p class="helper-text">Start here. Add symptoms, patient details, and any reports before running triage.</p>
 
             <label class="field-label" for="symptomInput">Symptoms or complaint</label>
             <textarea id="symptomInput" rows="7" placeholder="Example: Fever for 3 days, body pain, headache, cough...&#10;उदाहरण: तीन दिन से बुखार, खांसी, बदन दर्द..."></textarea>
@@ -105,6 +165,10 @@
               </label>
             </div>
 
+            <label class="field-label" for="reportInput">Patient reports</label>
+            <input id="reportInput" type="file" multiple accept=".txt,.csv,.json,.pdf,.png,.jpg,.jpeg" />
+            <div id="reportList" class="mini-list empty-state">No reports uploaded.</div>
+
             <input id="triageMode" type="hidden" value="llm" />
             <input id="llmEndpoint" type="hidden" value="/api/triage" />
 
@@ -120,40 +184,174 @@
               <button class="secondary-action" id="clearButton" type="button">New case</button>
             </div>
             <div class="agent-status" id="agentStatus">Ready for a new patient case.</div>
+            <div class="step-actions">
+              <span></span>
+              <button class="secondary-action" type="button" data-next-stage="triage">Next</button>
+            </div>
           </section>
 
-          <section class="panel" data-panel="triage">
+          <section class="panel patient-panel step-panel is-locked" data-panel="triage" data-stage-panel="triage">
             <div class="panel-head">
               <div>
                 <p class="eyebrow">Step 2</p>
                 <h2>Possible conditions</h2>
               </div>
             </div>
+            <p class="helper-text">This step opens after triage is run.</p>
             <div id="conditionList" class="stack empty-state">Step 1 is waiting for symptoms and patient details.</div>
+            <div class="step-actions">
+              <button class="secondary-action" type="button" data-prev-stage="intake">Back</button>
+              <button class="secondary-action" type="button" data-next-stage="followup">Next</button>
+            </div>
           </section>
 
-          <section class="panel" data-panel="followup">
+          <section class="panel patient-panel step-panel is-locked" data-panel="followup" data-stage-panel="followup">
             <div class="panel-head">
               <div>
                 <p class="eyebrow">Step 3</p>
                 <h2>Follow-up questions</h2>
               </div>
             </div>
+            <p class="helper-text">Answer these questions to narrow the case before booking.</p>
             <div id="questionList" class="questions empty-state">Follow-up questions appear after triage.</div>
             <button class="primary-action refine-action" id="refineButton" type="button" disabled>Refine with answers</button>
+            <div class="step-actions">
+              <button class="secondary-action" type="button" data-prev-stage="triage">Back</button>
+              <button class="secondary-action" type="button" data-next-stage="routing">Next</button>
+            </div>
           </section>
 
-          <section class="panel" data-panel="routing">
+          <section class="panel patient-panel step-panel is-locked" data-panel="routing" data-stage-panel="routing">
             <div class="panel-head">
               <div>
                 <p class="eyebrow">Step 4</p>
                 <h2>Doctor routing</h2>
               </div>
             </div>
+            <p class="helper-text">Review the recommended department before choosing a doctor.</p>
             <div id="doctorPanel" class="stack empty-state">Specialist routing appears after triage.</div>
+            <div class="step-actions">
+              <button class="secondary-action" type="button" data-prev-stage="followup">Back</button>
+              <button class="secondary-action" type="button" data-next-stage="appointments">Next</button>
+            </div>
           </section>
 
-          <section class="panel panel-wide" data-panel="feedback">
+          <section class="panel panel-wide patient-panel step-panel is-locked" data-panel="appointments" data-stage-panel="appointments">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Appointment booking</p>
+                <h2>Available doctors and slots</h2>
+              </div>
+            </div>
+            <p class="helper-text">Search the recommended specialty by city, hospital, or nearby radius, then select a slot.</p>
+            <div class="doctor-search-controls">
+              <label>
+                Specialty
+                <select id="doctorSpecialtyInput"></select>
+              </label>
+              <label>
+                City
+                <select id="doctorCityInput"></select>
+              </label>
+              <label>
+                Hospital
+                <select id="doctorHospitalInput"></select>
+              </label>
+              <label>
+                Nearby radius
+                <select id="doctorRadiusInput">
+                  <option value="0">Any distance</option>
+                  <option value="5">Within 5 km</option>
+                  <option value="10">Within 10 km</option>
+                  <option value="25">Within 25 km</option>
+                  <option value="50">Within 50 km</option>
+                </select>
+              </label>
+              <button class="primary-action" id="searchDoctorsButton" type="button">Search doctors</button>
+            </div>
+            <div id="appointmentList" class="stack empty-state">Run triage to see doctor availability.</div>
+            <div class="step-actions">
+              <button class="secondary-action" type="button" data-prev-stage="routing">Back</button>
+              <button class="secondary-action" type="button" data-next-stage="treatment">Next</button>
+            </div>
+          </section>
+
+          <section class="panel panel-wide patient-panel step-panel is-locked" data-panel="treatment" data-stage-panel="treatment">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Treatment</p>
+                <h2>Prescription and doctor advice</h2>
+              </div>
+            </div>
+            <p class="helper-text">After the doctor completes the visit, prescription, requested lab tests, and medicine options appear here.</p>
+            <div id="patientTreatmentPanel" class="stack empty-state">No treatment details available yet.</div>
+            <div class="step-actions">
+              <button class="secondary-action" type="button" data-prev-stage="appointments">Back</button>
+              <button class="secondary-action" type="button" data-next-stage="feedback">Next</button>
+            </div>
+          </section>
+
+          <section class="panel panel-wide doctor-panel-view" data-panel="doctor">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Doctor interface</p>
+                <h2>Appointments</h2>
+              </div>
+            </div>
+            <p class="helper-text">Select a booked patient, review intake details, add clinical notes, and request additional reports.</p>
+            <div class="doctor-workspace">
+              <div>
+                <h3>Booked appointments</h3>
+                <div id="doctorQueue" class="stack empty-state">Appointments will appear here after patients book a slot.</div>
+              </div>
+              <div>
+                <h3>Case details</h3>
+                <div id="doctorCaseDetails" class="stack empty-state">Select a patient case.</div>
+                <label class="field-label" for="doctorNote">Doctor note</label>
+                <textarea id="doctorNote" rows="3" placeholder="Clinical observations, additional advice, or plan"></textarea>
+                <label class="field-label" for="doctorFollowup">Additional follow-up questions</label>
+                <textarea id="doctorFollowup" rows="2" placeholder="Questions to ask in next visit or call"></textarea>
+                <label class="field-label" for="doctorReportRequest">Additional reports requested</label>
+                <textarea id="doctorReportRequest" rows="2" placeholder="Example: CBC, LFT, HbA1c, chest X-ray"></textarea>
+                <button class="primary-action refine-action" id="saveDoctorInputButton" type="button">Save treatment plan</button>
+                <div class="step-actions">
+                  <span></span>
+                  <button class="secondary-action" type="button" data-doctor-next="prescription">Next</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel panel-wide doctor-panel-view" data-panel="prescription">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Doctor interface</p>
+                <h2>Prescription and lab tests</h2>
+              </div>
+            </div>
+            <p class="helper-text">Save prescription text or upload the prescription after the physical consultation.</p>
+            <div class="doctor-workspace">
+              <div>
+                <label class="field-label" for="prescriptionInput">Prescription text</label>
+                <textarea id="prescriptionInput" rows="5" placeholder="Example: Paracetamol 500mg twice daily after food"></textarea>
+                <label class="field-label" for="prescriptionFile">Prescription file</label>
+                <input id="prescriptionFile" type="file" accept=".txt,.pdf,.png,.jpg,.jpeg" />
+                <button class="primary-action refine-action" id="savePrescriptionButton" type="button">Save prescription</button>
+                <div class="step-actions">
+                  <button class="secondary-action" type="button" data-doctor-prev="doctor">Back</button>
+                  <span></span>
+                </div>
+              </div>
+              <div>
+                <h3>Saved prescriptions</h3>
+                <div id="prescriptionList" class="stack empty-state">No prescription saved yet.</div>
+                <h3>Medicine options</h3>
+                <div id="medicineList" class="stack empty-state">Save prescription text to see salt matches and brand prices.</div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel panel-wide patient-panel step-panel is-locked" data-panel="feedback" data-stage-panel="feedback">
             <div class="panel-head">
               <div>
                 <p class="eyebrow">Case review</p>
@@ -188,7 +386,16 @@
     </main>
 
     <script src="config/healthcare.config.js"></script>
+    <script src="config/clinical-seed.config.js"></script>
+    <script src="config/auth.config.js"></script>
+    <script src="config/hospitals.config.js"></script>
+    <script src="config/medicines.config.js"></script>
+    <script src="config/medicine-seed.config.js"></script>
     <script src="js/case-store.js"></script>
+    <script src="js/care-data-store.js"></script>
+    <script src="js/report-service.js"></script>
+    <script src="js/appointment-service.js"></script>
+    <script src="js/medicine-service.js"></script>
     <script src="js/triage-engine.js"></script>
     <script src="app.js"></script>
   </body>

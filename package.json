@@ -1,0 +1,12 @@
+{
+  "name": "axnovus-care-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Axnovus Care Agent demo server",
+  "scripts": {
+    "start": "node server.example.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

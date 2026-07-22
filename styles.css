@@ -23,6 +23,69 @@ body {
   font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
+.login-screen {
+  min-height: 100vh;
+  display: grid;
+  align-content: center;
+  gap: 28px;
+  padding: 40px;
+  background: linear-gradient(135deg, #eef6f9 0%, #ffffff 52%, #f5f8fb 100%);
+}
+
+.login-brand {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  max-width: 1120px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.login-brand strong,
+.login-brand span {
+  display: block;
+}
+
+.login-grid {
+  max-width: 1120px;
+  width: 100%;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+
+.single-login {
+  max-width: 560px;
+  grid-template-columns: 1fr;
+}
+
+.login-card {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 28px;
+}
+
+.login-card h1 {
+  margin: 8px 0 12px;
+  font-size: clamp(1.8rem, 3vw, 3rem);
+  line-height: 1;
+}
+
+.login-card p {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.quick-login {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 14px 0;
+}
+
 button,
 input,
 textarea,
@@ -74,9 +137,61 @@ select {
   margin-top: 3px;
 }
 
+.role-switch {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.session-label {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #d6e9f0;
+  padding: 11px 10px;
+  font-weight: 800;
+}
+
+.role-button {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #d6e9f0;
+  padding: 11px 10px;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.role-button.is-active {
+  background: #ffffff;
+  color: var(--navy);
+}
+
 .care-path {
   display: grid;
   gap: 10px;
+}
+
+.is-hidden,
+.is-locked,
+body.app-locked .app-shell,
+body.patient-mode .doctor-panel-view,
+body.doctor-mode .patient-panel,
+body.doctor-mode .patient-care-path,
+body.patient-mode .doctor-care-path {
+  display: none !important;
+}
+
+body.doctor-mode .doctor-panel-view {
+  display: block;
+}
+
+.step-actions {
+  display: grid;
+  grid-template-columns: 120px 120px;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 16px;
 }
 
 .path-title {
@@ -133,6 +248,11 @@ select {
 .path-step.is-complete span {
   background: rgba(14, 159, 110, 0.18);
   color: #8cf2c6;
+}
+
+.path-step.is-disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
 }
 
 .rail-panel {
@@ -213,7 +333,8 @@ select {
 
 .grid {
   display: grid;
-  grid-template-columns: minmax(420px, 0.95fr) minmax(360px, 1.05fr);
+  grid-template-columns: minmax(520px, 960px);
+  justify-content: center;
   gap: 18px;
   align-items: start;
 }
@@ -227,7 +348,7 @@ select {
 }
 
 .panel-large {
-  grid-row: span 3;
+  grid-row: auto;
 }
 
 .panel-wide {
@@ -245,6 +366,12 @@ select {
 .panel h2 {
   margin: 3px 0 0;
   font-size: 1.2rem;
+}
+
+.helper-text {
+  color: var(--muted);
+  line-height: 1.5;
+  margin: -4px 0 16px;
 }
 
 .icon-button {
@@ -443,12 +570,106 @@ select:focus {
   gap: 16px;
 }
 
+.doctor-workspace {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(320px, 1.1fr);
+  gap: 16px;
+}
+
+.doctor-workspace h3 {
+  margin: 0 0 12px;
+  font-size: 1rem;
+}
+
+.doctor-search-controls {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+  padding: 14px;
+  margin: 0 0 16px;
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1.3fr 0.9fr auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.doctor-search-controls label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-weight: 800;
+  font-size: 0.82rem;
+}
+
+.doctor-search-controls .primary-action {
+  min-height: 45px;
+}
+
 .feedback-box,
-.dataset-box {
+.dataset-box,
+.appointment-card,
+.case-card,
+.medicine-card,
+.mini-list {
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 14px;
   background: #ffffff;
+}
+
+.mini-list {
+  margin: 12px 0 16px;
+}
+
+.case-card.is-selected {
+  border-color: var(--cyan);
+  background: #f0fbfd;
+}
+
+.slot-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.slot-button {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--soft);
+  padding: 8px 12px;
+  color: var(--navy);
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.doctor-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.doctor-meta span {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 5px 9px;
+  color: var(--muted);
+  background: #ffffff;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.price-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.price-row:first-of-type {
+  border-top: 0;
 }
 
 .consent-row {
@@ -568,6 +789,8 @@ select:focus {
   .form-row,
   .action-row,
   .feedback-grid,
+  .doctor-workspace,
+  .doctor-search-controls,
   .agent-options {
     grid-template-columns: 1fr;
   }

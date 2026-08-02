@@ -131,6 +131,8 @@ The current local prototype stores verified signup accounts in browser `localSto
 
 Forgot-password generates a strong temporary password in the browser and only saves the replacement hash after the server confirms that the email was accepted. Users who sign in with a temporary password are prompted to change it from the `Password` action in the application header.
 
+On plain HTTP droplet URLs, some browsers do not expose `crypto.subtle`. The app includes a SHA-256 fallback so seeded demo login still works, but production should still be served over HTTPS with backend-side password hashing.
+
 Seeded local login profiles are configured in `config/auth.config.js` for customer demonstrations while Gmail signup remains available for future production email activation:
 
 | Profile | Email | Password |

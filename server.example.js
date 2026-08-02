@@ -1,6 +1,7 @@
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
+const tls = require("node:tls");
 
 const rootDir = __dirname;
 const port = Number(process.env.PORT || 4173);
@@ -79,6 +80,183 @@ function readJson(req) {
     });
     req.on("end", () => resolve(JSON.parse(body || "{}")));
     req.on("error", reject);
+  });
+}
+
+function smtpCommand(socket, command) {
+  return new Promise((resolve, reject) => {
+    let buffer = "";
+    const onData = (chunk) => {
+      buffer += chunk.toString("utf8");
+      const lines = buffer.split(/\r?\n/).filter(Boolean);
+      const last = lines.at(-1) || "";
+      if (/^\d{3} /.test(last)) {
+        socket.off("data", onData);
+        if (/^[23]/.test(last)) resolve(buffer);
+        else reject(new Error(buffer.trim()));
+      }
+    };
+    socket.on("data", onData);
+    if (command) socket.write(`${command}\r\n`);
+  });
+}
+
+function encodeBase64(value) {
+  return Buffer.from(String(value), "utf8").toString("base64");
+}
+
+function normalizeMailData(value) {
+  return String(value || "")
+    .replace(/\r?\n/g, " ")
+    .trim();
+}
+
+function buildMailMessage({ to, subject, text, from }) {
+  const safeSubject = normalizeMailData(subject);
+  const safeText = String(text || "").replace(/\r?\n\./g, "\n..");
+  return [
+    `From: Axnovus Care <${from}>`,
+    `To: ${normalizeMailData(to)}`,
+    `Subject: ${safeSubject}`,
+    "MIME-Version: 1.0",
+    "Content-Type: text/plain; charset=UTF-8",
+    "",
+    safeText,
+  ].join("\r\n");
+}
+
+function base64Url(value) {
+  return Buffer.from(value, "utf8").toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function hasGmailApiConfig() {
+  return Boolean(process.env.GMAIL_CLIENT_ID && process.env.GMAIL_CLIENT_SECRET && process.env.GMAIL_REFRESH_TOKEN && process.env.GMAIL_FROM);
+}
+
+async function getGmailAccessToken() {
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: process.env.GMAIL_CLIENT_ID,
+      client_secret: process.env.GMAIL_CLIENT_SECRET,
+      refresh_token: process.env.GMAIL_REFRESH_TOKEN,
+      grant_type: "refresh_token",
+    }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || !body.access_token) {
+    throw new Error(body.error_description || body.error || "Gmail API token request failed.");
+  }
+  return body.access_token;
+}
+
+async function sendGmailApiMail({ to, subject, text }) {
+  const from = process.env.GMAIL_FROM;
+  const accessToken = await getGmailAccessToken();
+  const raw = base64Url(buildMailMessage({ to, subject, text, from }));
+  const response = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ raw }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(body.error?.message || "Gmail API email send failed.");
+  }
+  return { devMode: false, provider: "gmail-api" };
+}
+
+async function sendMail(mail) {
+  if (hasGmailApiConfig()) return sendGmailApiMail(mail);
+  return sendSmtpMail(mail);
+}
+
+async function sendSmtpMail({ to, subject, text }) {
+  const host = process.env.SMTP_HOST || "smtp.gmail.com";
+  const portNumber = Number(process.env.SMTP_PORT || 465);
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+  const from = process.env.SMTP_FROM || user;
+  if (!user || !pass || !from) return { devMode: true, provider: "local" };
+
+  const socket = tls.connect({ host, port: portNumber, servername: host });
+  await new Promise((resolve, reject) => {
+    socket.once("secureConnect", resolve);
+    socket.once("error", reject);
+  });
+  try {
+    await smtpCommand(socket);
+    await smtpCommand(socket, `EHLO ${process.env.SMTP_EHLO_HOST || "axnovus-care.local"}`);
+    await smtpCommand(socket, "AUTH LOGIN");
+    await smtpCommand(socket, encodeBase64(user));
+    await smtpCommand(socket, encodeBase64(pass));
+    await smtpCommand(socket, `MAIL FROM:<${from}>`);
+    await smtpCommand(socket, `RCPT TO:<${to}>`);
+    await smtpCommand(socket, "DATA");
+    socket.write(`${buildMailMessage({ to, subject, text, from })}\r\n.\r\n`);
+    await smtpCommand(socket);
+    await smtpCommand(socket, "QUIT").catch(() => null);
+    return { devMode: false, provider: "smtp" };
+  } finally {
+    socket.end();
+  }
+}
+
+async function handleSignupVerification(req, res) {
+  const payload = await readJson(req);
+  const email = String(payload.email || "").trim().toLowerCase();
+  const name = normalizeMailData(payload.name || "User");
+  const code = String(payload.code || "").trim();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || !/^\d{6}$/.test(code)) {
+    sendJson(res, 400, { error: "Valid email and 6 digit code are required." });
+    return;
+  }
+  const result = await sendMail({
+    to: email,
+    subject: "Axnovus Care email verification",
+    text: `Hello ${name},\n\nYour Axnovus Care verification code is ${code}.\n\nThis code expires in 10 minutes.\n\nIf you did not request this, ignore this email.`,
+  });
+  sendJson(res, 200, {
+    ok: true,
+    devMode: result.devMode,
+    provider: result.provider,
+    message: result.devMode ? "Email is not configured. Local verification fallback is active." : "Verification email sent.",
+  });
+}
+
+async function handlePasswordReset(req, res) {
+  const payload = await readJson(req);
+  const email = String(payload.email || "").trim().toLowerCase();
+  const name = normalizeMailData(payload.name || "User");
+  const temporaryPassword = String(payload.temporaryPassword || "").trim();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || temporaryPassword.length < 8) {
+    sendJson(res, 400, { error: "Valid email and temporary password are required." });
+    return;
+  }
+  const result = await sendMail({
+    to: email,
+    subject: "Axnovus Care temporary password",
+    text: [
+      `Hello ${name},`,
+      "",
+      "A temporary password was requested for your Axnovus Care account.",
+      "",
+      `Temporary password: ${temporaryPassword}`,
+      "",
+      "Sign in with this password and change it immediately from the Password option.",
+      "",
+      "If you did not request this, contact your administrator.",
+    ].join("\n"),
+  });
+  sendJson(res, 200, {
+    ok: true,
+    devMode: result.devMode,
+    provider: result.provider,
+    message: result.devMode ? "Email is not configured. Local reset fallback is active." : "Temporary password sent.",
   });
 }
 
@@ -180,6 +358,14 @@ function serveStatic(req, res) {
 
 const server = http.createServer(async (req, res) => {
   try {
+    if (req.method === "POST" && req.url === "/api/send-verification") {
+      await handleSignupVerification(req, res);
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/send-password-reset") {
+      await handlePasswordReset(req, res);
+      return;
+    }
     if (req.method === "POST" && req.url === "/api/triage") {
       await handleTriage(req, res);
       return;

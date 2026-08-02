@@ -77,6 +77,75 @@ $env:OPENAI_API_KEY="your_api_key"
 docker run --name axnovus-care-agent --rm -p 4174:4173 -e OPENAI_API_KEY=$env:OPENAI_API_KEY axnovus-care-agent
 ```
 
+Run with Gmail API email delivery for signup verification and forgot-password reset:
+
+```powershell
+$env:GMAIL_CLIENT_ID="your_google_oauth_client_id"
+$env:GMAIL_CLIENT_SECRET="your_google_oauth_client_secret"
+$env:GMAIL_REFRESH_TOKEN="your_google_oauth_refresh_token"
+$env:GMAIL_FROM="your_gmail_address@gmail.com"
+docker run --name axnovus-care-agent --rm -p 4174:4173 `
+  -e GMAIL_CLIENT_ID=$env:GMAIL_CLIENT_ID `
+  -e GMAIL_CLIENT_SECRET=$env:GMAIL_CLIENT_SECRET `
+  -e GMAIL_REFRESH_TOKEN=$env:GMAIL_REFRESH_TOKEN `
+  -e GMAIL_FROM=$env:GMAIL_FROM `
+  axnovus-care-agent
+```
+
+Gmail API setup:
+
+1. In Google Cloud Console, create/select a project and enable `Gmail API`.
+2. Configure the OAuth consent screen. Add the sender Gmail account as a test user if the app is in testing mode.
+3. Create an OAuth client for a web application.
+4. Authorize the Gmail scope `https://www.googleapis.com/auth/gmail.send` and generate a refresh token for the sender mailbox.
+5. Put the OAuth client id, client secret, refresh token, and sender address into the four `GMAIL_*` environment variables above.
+6. On a DigitalOcean Droplet, store these values in a server-only `.env` file or Docker Compose environment block. Do not put them in `config/auth.config.js` or browser code.
+
+Optional Gmail SMTP fallback:
+
+```powershell
+$env:SMTP_HOST="smtp.gmail.com"
+$env:SMTP_PORT="465"
+$env:SMTP_USER="your_gmail_address@gmail.com"
+$env:SMTP_PASS="your_gmail_app_password"
+$env:SMTP_FROM="your_gmail_address@gmail.com"
+docker run --name axnovus-care-agent --rm -p 4174:4173 `
+  -e SMTP_HOST=$env:SMTP_HOST `
+  -e SMTP_PORT=$env:SMTP_PORT `
+  -e SMTP_USER=$env:SMTP_USER `
+  -e SMTP_PASS=$env:SMTP_PASS `
+  -e SMTP_FROM=$env:SMTP_FROM `
+  axnovus-care-agent
+```
+
+Use a Gmail app password, not your normal Gmail password. Without SMTP variables, local development uses an on-screen verification-code fallback so the signup flow can still be tested.
+
+The same email service is used by:
+
+- `POST /api/send-verification` for signup account activation.
+- `POST /api/send-password-reset` for forgot-password temporary password delivery.
+
+## Auth Storage Notes
+
+The current local prototype stores verified signup accounts in browser `localStorage` under `axnovus-care-users-v1`. Passwords are stored as SHA-256 hashes, and the signed-in session is stored under `axnovus-care-session-v1` so refresh keeps the user inside the application.
+
+Forgot-password generates a strong temporary password in the browser and only saves the replacement hash after the server confirms that the email was accepted. Users who sign in with a temporary password are prompted to change it from the `Password` action in the application header.
+
+Seeded local login profiles are configured in `config/auth.config.js` for customer demonstrations while Gmail signup remains available for future production email activation:
+
+| Profile | Email | Password |
+| --- | --- | --- |
+| Customer | `customer@axnovus.com` | `Customer@123` |
+| Hospital receptionist | `receptionist@axnovus.com` | `Reception@123` |
+| Doctor | `doctor@axnovus.com` | `Doctor@123` |
+
+For production, replace browser-local auth with a backend identity service:
+
+1. Store users, roles, email verification state, and password hashes in PostgreSQL.
+2. Hash passwords server-side with Argon2id or bcrypt plus a per-user salt.
+3. Store sessions in secure HTTP-only cookies or short-lived JWT plus refresh-token rotation.
+4. Enforce role-based authorization on every API route, not only in the browser UI.
+
 Using Docker Compose:
 
 ```powershell

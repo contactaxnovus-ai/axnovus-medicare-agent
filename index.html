@@ -6,7 +6,7 @@
     <title>Axnovus Care Agent</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -19,20 +19,72 @@
         </div>
       </div>
       <div class="login-grid single-login">
-        <article class="login-card">
+        <article class="login-card" id="loginCard">
           <p class="eyebrow">Secure access</p>
           <h1>Sign in to continue</h1>
-          <p>Enter a user ID and PIN. The workspace opens according to the role assigned to that user.</p>
-          <label class="field-label" for="loginId">User ID</label>
-          <input id="loginId" type="text" placeholder="PAT-1001 or DOC-DEL-01" />
-          <label class="field-label" for="loginPin">PIN</label>
-          <input id="loginPin" type="password" placeholder="Demo PIN" />
+          <p>Use the verified email and password created during signup.</p>
+          <label class="field-label" for="loginId">Email</label>
+          <input id="loginId" type="text" inputmode="email" autocomplete="email" placeholder="name@example.com" />
+          <label class="field-label" for="loginPassword">Password</label>
+          <input id="loginPassword" type="password" autocomplete="current-password" placeholder="Enter password" />
           <button class="primary-action" id="loginButton" type="button">Sign in</button>
-          <div class="quick-login">
-            <button class="chip" type="button" data-demo-login="patient">Use patient demo</button>
-            <button class="chip" type="button" data-demo-login="doctor">Use doctor demo</button>
+          <div class="action-row auth-actions">
+            <button class="secondary-action signup-link-action" id="openSignupButton" type="button">Signup</button>
+            <button class="text-action" id="forgotPasswordButton" type="button">Forgot password?</button>
           </div>
-          <div class="agent-status" id="loginStatus">Demo users: PAT-1001 / 1234, DOC-DEL-01 / 4321</div>
+          <div class="agent-status" id="loginStatus">Create an account and verify your email before signing in.</div>
+        </article>
+
+        <article class="login-card signup-card is-hidden" id="signupCard">
+          <p class="eyebrow">Create profile</p>
+          <h1>Sign up</h1>
+          <p>Enter details, set a strong password, and verify your email before login is enabled.</p>
+          <div class="form-row two-column">
+            <label>
+              Full name
+              <input id="signupName" type="text" placeholder="Full name" />
+            </label>
+            <label>
+              Email
+              <input id="signupEmail" type="text" inputmode="email" placeholder="name@example.com" />
+            </label>
+          </div>
+          <div class="form-row two-column">
+            <label>
+              Phone
+              <input id="signupPhone" type="tel" placeholder="+91 mobile number" />
+            </label>
+            <label>
+              City
+              <input id="signupCity" type="text" placeholder="City" />
+            </label>
+          </div>
+          <div class="form-row two-column">
+            <label>
+              Role
+              <select id="signupRole">
+                <option value="customer">Customer</option>
+                <option value="receptionist">Hospital receptionist</option>
+                <option value="doctor">Doctor</option>
+              </select>
+            </label>
+            <label>
+              Password
+              <input id="signupPassword" type="password" autocomplete="new-password" placeholder="Minimum 8 chars, upper, lower, number, symbol" />
+            </label>
+          </div>
+          <label class="field-label" for="signupHospital">Hospital / clinic, optional</label>
+          <input id="signupHospital" type="text" placeholder="Required for receptionist or doctor in production" />
+          <div class="action-row auth-actions">
+            <button class="primary-action signup-action" id="signupButton" type="button">Send verification email</button>
+            <button class="secondary-action" id="goToSigninButton" type="button">Sign in</button>
+          </div>
+          <div class="verification-box is-hidden" id="verificationBox">
+            <label class="field-label" for="verificationCodeInput">Email verification code</label>
+            <input id="verificationCodeInput" type="text" inputmode="numeric" maxlength="6" placeholder="6 digit code" />
+            <button class="primary-action signup-action" id="verifySignupButton" type="button">Verify and create account</button>
+          </div>
+          <div class="agent-status" id="signupStatus">Verification email is required before account activation.</div>
         </article>
       </div>
     </section>
@@ -48,44 +100,96 @@
         </a>
 
         <div class="role-switch session-switch" aria-label="Workspace session">
-          <div class="session-label" id="sessionLabel">Signed in</div>
-          <button class="role-button" id="logoutButton" type="button">Logout</button>
+          <button class="account-trigger" id="accountMenuButton" type="button" aria-expanded="false" aria-controls="accountMenu">
+            <span class="account-avatar" id="accountAvatar">AX</span>
+            <span class="account-copy">
+              <strong id="sessionLabel">Signed in</strong>
+              <small id="sessionRoleLabel">Workspace</small>
+            </span>
+            <span class="account-caret">⌄</span>
+          </button>
+          <div class="account-menu is-hidden" id="accountMenu">
+            <button id="openChangePasswordButton" type="button">Change password</button>
+            <button id="logoutButton" type="button">Logout</button>
+          </div>
         </div>
 
-        <nav class="care-path patient-care-path" aria-label="Patient case path">
+        <nav class="care-path patient-care-path" aria-label="Customer workspace path">
           <div class="path-title">
-            <p class="eyebrow">Care path</p>
-            <h2>Complete each step to unlock the next one.</h2>
+            <p class="eyebrow">Customer desk</p>
+            <h2>Patient care, reports, triage, booking, and medicines.</h2>
           </div>
-          <button class="path-step is-active" data-view="intake" data-stage="intake">
-            <span>1</span>
+          <button class="path-step is-active" data-view="members" data-stage="members">
+            <span></span>
+            <strong>Patients</strong>
+            <small>Profiles</small>
+          </button>
+          <button class="path-step" data-view="reports" data-stage="reports">
+            <span></span>
+            <strong>Reports</strong>
+            <small>Upload reports</small>
+          </button>
+          <button class="path-step" data-view="intake" data-stage="intake">
+            <span></span>
             <strong>Intake</strong>
-            <small>Symptoms, voice, and patient details</small>
+            <small>Symptoms and Hindi voice</small>
           </button>
           <button class="path-step" data-view="triage" data-stage="triage">
-            <span>2</span>
+            <span></span>
             <strong>Triage</strong>
-            <small>Possible conditions and confidence</small>
+            <small>Possible conditions</small>
           </button>
           <button class="path-step" data-view="followup" data-stage="followup">
-            <span>3</span>
+            <span></span>
             <strong>Follow-up</strong>
-            <small>Answers that narrow the case</small>
+            <small>Narrow the case</small>
           </button>
           <button class="path-step" data-view="routing" data-stage="routing">
-            <span>4</span>
+            <span></span>
             <strong>Routing</strong>
             <small>Specialist or emergency desk</small>
           </button>
           <button class="path-step" data-view="appointments" data-stage="appointments">
-            <span>5</span>
-            <strong>Booking</strong>
+            <span></span>
+            <strong>Doctors</strong>
             <small>Hospital, doctor, and slot</small>
           </button>
           <button class="path-step" data-view="treatment" data-stage="treatment">
-            <span>6</span>
-            <strong>Treatment</strong>
+            <span></span>
+            <strong>Prescriptions</strong>
             <small>Prescription, tests, medicines</small>
+          </button>
+          <button class="path-step" data-view="medicineSearch" data-stage="medicineSearch">
+            <span></span>
+            <strong>Medicine search</strong>
+            <small>Salt, company, prices</small>
+          </button>
+        </nav>
+
+        <nav class="care-path receptionist-care-path is-hidden" aria-label="Receptionist workspace path">
+          <div class="path-title">
+            <p class="eyebrow">Reception desk</p>
+            <h2>Register patients, review symptoms, upload reports, and book doctors.</h2>
+          </div>
+          <button class="path-step is-active" data-view="receptionPatients">
+            <span></span>
+            <strong>Patients</strong>
+            <small>Add or select patient</small>
+          </button>
+          <button class="path-step" data-view="intake">
+            <span></span>
+            <strong>Symptoms</strong>
+            <small>Typing, voice, triage</small>
+          </button>
+          <button class="path-step" data-view="reports">
+            <span></span>
+            <strong>Reports</strong>
+            <small>Upload for selected patient</small>
+          </button>
+          <button class="path-step" data-view="appointments">
+            <span></span>
+            <strong>Booking</strong>
+            <small>Doctors in hospital</small>
           </button>
         </nav>
 
@@ -95,23 +199,54 @@
             <h2>Review booked cases and complete the visit record.</h2>
           </div>
           <button class="path-step is-active" data-view="doctor">
-            <span>1</span>
+            <span></span>
             <strong>Appointments</strong>
             <small>Booked patients</small>
           </button>
           <button class="path-step" data-view="prescription">
-            <span>2</span>
+            <span></span>
             <strong>Treatment</strong>
             <small>Notes, reports, prescription</small>
+          </button>
+          <button class="path-step" data-view="history">
+            <span></span>
+            <strong>History</strong>
+            <small>Previous visits</small>
           </button>
         </nav>
 
         <section class="rail-panel">
           <p class="eyebrow">Guided flow</p>
-          <h2>Patient intake, appointment booking, doctor review, and prescription support.</h2>
-          <p>Use Patient view for intake and booking. Use Doctor view after the patient has booked a slot.</p>
+          <h2>Customer, reception, and doctor workflows share the same clinical and appointment components.</h2>
+          <p>Role permissions decide which panels are visible and which bookings can be created.</p>
         </section>
       </aside>
+
+      <section class="password-panel is-hidden" id="changePasswordPanel" aria-label="Change password">
+        <article class="password-card">
+          <div>
+            <p class="eyebrow">Account security</p>
+            <h2>Change password</h2>
+          </div>
+          <label>
+            Current password
+            <input id="oldPasswordInput" type="password" autocomplete="current-password" />
+          </label>
+          <label>
+            New password
+            <input id="newPasswordInput" type="password" autocomplete="new-password" placeholder="Minimum 8 chars, upper, lower, number, symbol" />
+          </label>
+          <label>
+            Confirm new password
+            <input id="confirmPasswordInput" type="password" autocomplete="new-password" />
+          </label>
+          <div class="action-row">
+            <button class="primary-action" id="changePasswordButton" type="button">Update password</button>
+            <button class="secondary-action" id="cancelChangePasswordButton" type="button">Cancel</button>
+          </div>
+          <div class="agent-status" id="changePasswordStatus">Use a strong password that is not shared with any other service.</div>
+        </article>
+      </section>
 
       <section class="workspace">
         <header class="topbar">
@@ -129,6 +264,133 @@
         </section>
 
         <div class="grid">
+          <section class="panel panel-wide patient-panel step-panel" data-panel="members" data-stage-panel="members">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Patient profiles</p>
+                <h2>Patients covered under this account</h2>
+              </div>
+            </div>
+            <div class="split-workspace">
+              <div>
+                <div class="form-row three-column">
+                  <label>
+                    Name
+                    <input id="memberNameInput" type="text" placeholder="Patient name" />
+                  </label>
+                  <label>
+                    Age
+                    <input id="memberAgeInput" type="number" min="0" max="120" placeholder="Age" />
+                  </label>
+                  <label>
+                    Sex
+                    <select id="memberSexInput">
+                      <option>Female</option>
+                      <option>Male</option>
+                      <option>Other</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="form-row two-column">
+                  <label>
+                    Relation
+                    <input id="memberRelationInput" type="text" placeholder="Self, father, child..." />
+                  </label>
+                  <label>
+                    City / State
+                    <input id="memberLocationInput" type="text" placeholder="City, State" />
+                  </label>
+                </div>
+                <button class="primary-action" id="saveMemberButton" type="button">Save patient</button>
+              </div>
+              <div>
+                <h3>Saved patients</h3>
+                <div id="familyMemberList" class="stack empty-state">No patients added yet.</div>
+              </div>
+            </div>
+            <div class="step-actions">
+              <span></span>
+              <button class="secondary-action" type="button" data-next-stage="reports">Next</button>
+            </div>
+          </section>
+
+          <section class="panel panel-wide patient-panel step-panel is-locked" data-panel="reports" data-stage-panel="reports">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Medical reports</p>
+                <h2>Upload reports for the selected patient</h2>
+              </div>
+            </div>
+            <div class="form-row two-column">
+              <label>
+                Patient
+                <select id="casePersonSelect"></select>
+              </label>
+              <label>
+                Report type
+                <select id="reportTypeInput">
+                  <option>Lab report</option>
+                  <option>Imaging report</option>
+                  <option>Discharge summary</option>
+                  <option>Previous prescription</option>
+                </select>
+              </label>
+            </div>
+            <label class="field-label" for="reportInput">Patient reports</label>
+            <input id="reportInput" type="file" multiple accept=".txt,.csv,.json,.pdf,.png,.jpg,.jpeg" />
+            <div id="reportList" class="mini-list empty-state">No reports uploaded.</div>
+            <div class="step-actions">
+              <button class="secondary-action" type="button" data-prev-stage="members">Back</button>
+              <button class="secondary-action" type="button" data-next-stage="intake">Next</button>
+            </div>
+          </section>
+
+          <section class="panel panel-wide receptionist-panel-view" data-panel="receptionPatients">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Reception desk</p>
+                <h2>Register or select patient</h2>
+              </div>
+            </div>
+            <div class="split-workspace">
+              <div>
+                <div class="form-row two-column">
+                  <label>
+                    Patient name
+                    <input id="receptionPatientName" type="text" placeholder="Patient name" />
+                  </label>
+                  <label>
+                    Mobile
+                    <input id="receptionPatientPhone" type="tel" placeholder="+91 mobile number" />
+                  </label>
+                </div>
+                <div class="form-row three-column">
+                  <label>
+                    Age
+                    <input id="receptionPatientAge" type="number" min="0" max="120" />
+                  </label>
+                  <label>
+                    Sex
+                    <select id="receptionPatientSex">
+                      <option>Female</option>
+                      <option>Male</option>
+                      <option>Other</option>
+                    </select>
+                  </label>
+                  <label>
+                    City
+                    <input id="receptionPatientCity" type="text" />
+                  </label>
+                </div>
+                <button class="primary-action" id="saveReceptionPatientButton" type="button">Save patient</button>
+              </div>
+              <div>
+                <h3>Patients at desk</h3>
+                <div id="receptionPatientList" class="stack empty-state">No receptionist patients added yet.</div>
+              </div>
+            </div>
+          </section>
+
           <section class="panel panel-large patient-panel step-panel" data-panel="intake" data-stage-panel="intake">
             <div class="panel-head">
               <div>
@@ -139,7 +401,22 @@
                 <span id="micIcon">Mic</span>
               </button>
             </div>
-            <p class="helper-text">Start here. Add symptoms, patient details, and any reports before running triage.</p>
+            <p class="helper-text">Select the patient, attach relevant reports from the report wallet, add symptoms, then run triage.</p>
+
+            <div class="form-row two-column">
+              <label>
+                Patient
+                <select id="intakePersonSelect"></select>
+              </label>
+              <label>
+                Reports for this triage
+                <select id="intakeReportSelect" multiple size="3"></select>
+              </label>
+            </div>
+            <div class="action-row compact-actions">
+              <button class="secondary-action" id="selectAllReportsButton" type="button">Select all reports</button>
+              <button class="secondary-action" id="clearSelectedReportsButton" type="button">Clear reports</button>
+            </div>
 
             <label class="field-label" for="symptomInput">Symptoms or complaint</label>
             <textarea id="symptomInput" rows="7" placeholder="Example: Fever for 3 days, body pain, headache, cough...&#10;उदाहरण: तीन दिन से बुखार, खांसी, बदन दर्द..."></textarea>
@@ -164,10 +441,6 @@
                 <input id="locationInput" type="text" value="Delhi, India" />
               </label>
             </div>
-
-            <label class="field-label" for="reportInput">Patient reports</label>
-            <input id="reportInput" type="file" multiple accept=".txt,.csv,.json,.pdf,.png,.jpg,.jpeg" />
-            <div id="reportList" class="mini-list empty-state">No reports uploaded.</div>
 
             <input id="triageMode" type="hidden" value="llm" />
             <input id="llmEndpoint" type="hidden" value="/api/triage" />
@@ -291,6 +564,28 @@
             </div>
           </section>
 
+          <section class="panel panel-wide patient-panel step-panel is-locked" data-panel="medicineSearch" data-stage-panel="medicineSearch">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Medicine search</p>
+                <h2>Find medicine options by salt</h2>
+              </div>
+            </div>
+            <p class="helper-text">Search by salt name or brand name to compare matching options, companies, and listed prices.</p>
+            <div class="doctor-search-controls medicine-search-controls">
+              <label>
+                Salt or brand
+                <input id="medicineSearchInput" type="text" placeholder="Example: paracetamol, cetirizine, pantoprazole" />
+              </label>
+              <button class="primary-action" id="searchMedicineButton" type="button">Search medicines</button>
+            </div>
+            <div id="medicineSearchList" class="stack empty-state">Search a salt or brand to see matching medicine options.</div>
+            <div class="step-actions">
+              <button class="secondary-action" type="button" data-prev-stage="treatment">Back</button>
+              <span></span>
+            </div>
+          </section>
+
           <section class="panel panel-wide doctor-panel-view" data-panel="doctor">
             <div class="panel-head">
               <div>
@@ -345,10 +640,19 @@
               <div>
                 <h3>Saved prescriptions</h3>
                 <div id="prescriptionList" class="stack empty-state">No prescription saved yet.</div>
-                <h3>Medicine options</h3>
-                <div id="medicineList" class="stack empty-state">Save prescription text to see salt matches and brand prices.</div>
               </div>
             </div>
+          </section>
+
+          <section class="panel panel-wide doctor-panel-view" data-panel="history">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Doctor interface</p>
+                <h2>Patient history</h2>
+              </div>
+            </div>
+            <p class="helper-text">Review previous symptoms, uploads, appointment notes, and prescriptions for the selected patient case.</p>
+            <div id="doctorHistoryPanel" class="stack empty-state">Select a booked patient from Appointments to see history.</div>
           </section>
 
           <section class="panel panel-wide patient-panel step-panel is-locked" data-panel="feedback" data-stage-panel="feedback">

@@ -1,6 +1,6 @@
 window.HOSPITAL_CONFIG = {
   provider: "local-config-directory",
-  externalSearchUrlTemplate: "https://www.google.com/search?q={specialty}%20doctor%20{city}%20{hospital}",
+  externalSearchUrlTemplate: "https://www.google.com/maps/search/{specialty}%20doctor%20{city}%20{hospital}",
   cityCenters: {
     Delhi: { latitude: 28.6139, longitude: 77.209 },
     Gurugram: { latitude: 28.4595, longitude: 77.0266 },
@@ -92,6 +92,7 @@ window.HOSPITAL_CONFIG = {
           name: "General Physician / Internal Medicine",
           doctors: [
             { id: "doc-ggn-im-01", name: "Dr. Simran Batra", years: 9, experience: "9 years", languages: ["English", "Hindi"], rating: 4.6, consultationFee: 1100, slots: ["Today 20:00", "Tomorrow 11:00"] },
+            { id: "doc-ax-001", name: "Doctor User", years: 12, experience: "12 years", languages: ["English", "Hindi"], rating: 4.6, consultationFee: 900, slots: ["Today 18:30", "Tomorrow 10:30", "Tomorrow 16:30"] },
           ],
         },
         {

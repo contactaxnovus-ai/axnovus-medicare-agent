@@ -1,10 +1,20 @@
 window.createCareDataStore = function createCareDataStore(storageKey = "axnovus-care-workspace-v1") {
+  const emptyData = {
+    cases: [],
+    appointments: [],
+    prescriptions: [],
+    doctorInputs: [],
+    members: [],
+    patients: [],
+    reports: [],
+  };
+
   function read() {
     try {
-      return JSON.parse(localStorage.getItem(storageKey) || '{"cases":[],"appointments":[],"prescriptions":[],"doctorInputs":[]}');
+      return { ...emptyData, ...JSON.parse(localStorage.getItem(storageKey) || "{}") };
     } catch (error) {
       console.warn("Could not read care workspace:", error);
-      return { cases: [], appointments: [], prescriptions: [], doctorInputs: [] };
+      return { ...emptyData };
     }
   }
 
@@ -31,6 +41,36 @@ window.createCareDataStore = function createCareDataStore(storageKey = "axnovus-
     return record;
   }
 
+  function upsertMember(member) {
+    const data = read();
+    const existingIndex = data.members.findIndex((item) => item.id === member.id);
+    const record = {
+      ...member,
+      id: member.id || id("member"),
+      updatedAt: new Date().toISOString(),
+      createdAt: member.createdAt || new Date().toISOString(),
+    };
+    if (existingIndex >= 0) data.members[existingIndex] = record;
+    else data.members.unshift(record);
+    write(data);
+    return record;
+  }
+
+  function upsertPatient(patient) {
+    const data = read();
+    const existingIndex = data.patients.findIndex((item) => item.id === patient.id);
+    const record = {
+      ...patient,
+      id: patient.id || id("patient"),
+      updatedAt: new Date().toISOString(),
+      createdAt: patient.createdAt || new Date().toISOString(),
+    };
+    if (existingIndex >= 0) data.patients[existingIndex] = record;
+    else data.patients.unshift(record);
+    write(data);
+    return record;
+  }
+
   function addAppointment(appointment) {
     const data = read();
     const record = { id: id("appt"), createdAt: new Date().toISOString(), status: "Booked", ...appointment };
@@ -47,6 +87,18 @@ window.createCareDataStore = function createCareDataStore(storageKey = "axnovus-
     return record;
   }
 
+  function addReports(reports) {
+    const data = read();
+    const records = reports.map((report) => ({
+      id: report.id || id("report"),
+      createdAt: new Date().toISOString(),
+      ...report,
+    }));
+    data.reports.unshift(...records);
+    write(data);
+    return records;
+  }
+
   function addPrescription(prescription) {
     const data = read();
     const record = { id: id("rx"), createdAt: new Date().toISOString(), ...prescription };
@@ -58,8 +110,11 @@ window.createCareDataStore = function createCareDataStore(storageKey = "axnovus-
   return {
     read,
     upsertCase,
+    upsertMember,
+    upsertPatient,
     addAppointment,
     addDoctorInput,
+    addReports,
     addPrescription,
   };
 };

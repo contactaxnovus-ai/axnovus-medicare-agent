@@ -1,11 +1,13 @@
 const config = window.TRIAGE_APP_CONFIG;
 const authConfig = window.AUTH_CONFIG || {
-  users: [
-    { id: "PAT-1001", pin: "1234", role: "patient", name: "Demo Patient" },
-    { id: "DOC-DEL-01", pin: "4321", role: "doctor", name: "Dr. Demo" },
-  ],
+  localUserStorageKey: "axnovus-care-users-v1",
+  sessionStorageKey: "axnovus-care-session-v1",
+  verificationEndpoint: "/api/send-verification",
+  passwordResetEndpoint: "/api/send-password-reset",
+  users: [],
   roles: {
-    patient: { label: "Patient", landing: "intake" },
+    customer: { label: "Customer", landing: "members" },
+    receptionist: { label: "Hospital Receptionist", landing: "receptionPatients" },
     doctor: { label: "Doctor", landing: "doctor" },
   },
 };
@@ -46,9 +48,14 @@ const state = {
   workspace: "patient",
   isLoggedIn: false,
   currentUser: null,
-  activePatientStage: "intake",
+  activePatientStage: "members",
+  activeReceptionPanel: "receptionPatients",
   activeDoctorPanel: "doctor",
-  unlockedStages: ["intake"],
+  selectedPersonId: "",
+  selectedReceptionPatientId: "",
+  selectedReportIds: [],
+  pendingSignup: null,
+  unlockedStages: ["members", "reports", "intake", "medicineSearch"],
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -64,6 +71,8 @@ function escapeHtml(value) {
 
 function getPatientContext() {
   return {
+    personId: state.selectedPersonId,
+    createdByRole: state.workspace,
     symptoms: $("#symptomInput").value.trim(),
     followupAnswers: state.followupAnswers,
     age: Number($("#ageInput").value || 0),
@@ -71,7 +80,7 @@ function getPatientContext() {
     location: $("#locationInput").value.trim(),
     languageHints: config.languageHints,
     model: $("#modelSelect").value || config.llm.defaultModel,
-    reports: state.reports,
+    reports: getSelectedReportsForCase(),
   };
 }
 
@@ -82,51 +91,452 @@ function setAgentStatus(message, tone = "info") {
   status.className = `agent-status ${tone === "info" ? "" : tone}`.trim();
 }
 
+function readLocalUsers() {
+  try {
+    return JSON.parse(localStorage.getItem(authConfig.localUserStorageKey || "axnovus-care-users-v1") || "[]");
+  } catch (error) {
+    console.warn("Could not read local users:", error);
+    return [];
+  }
+}
+
+function writeLocalUsers(users) {
+  localStorage.setItem(authConfig.localUserStorageKey || "axnovus-care-users-v1", JSON.stringify(users));
+}
+
+function getAllUsers() {
+  const localUsers = readLocalUsers();
+  const localKeys = new Set(localUsers.flatMap((user) => [user.id, user.email].filter(Boolean).map((value) => value.toLowerCase())));
+  const seededUsers = authConfig.users.filter((user) => ![user.id, user.email].filter(Boolean).some((value) => localKeys.has(value.toLowerCase())));
+  return [...localUsers, ...seededUsers];
+}
+
+function readSession() {
+  try {
+    return JSON.parse(localStorage.getItem(authConfig.sessionStorageKey || "axnovus-care-session-v1") || "null");
+  } catch (error) {
+    console.warn("Could not read session:", error);
+    return null;
+  }
+}
+
+function writeSession(user) {
+  localStorage.setItem(
+    authConfig.sessionStorageKey || "axnovus-care-session-v1",
+    JSON.stringify({ userId: user.id, email: user.email, signedInAt: new Date().toISOString() })
+  );
+}
+
+function clearSession() {
+  localStorage.removeItem(authConfig.sessionStorageKey || "axnovus-care-session-v1");
+}
+
+function passwordMeetsPolicy(password) {
+  return /[a-z]/.test(password) && /[A-Z]/.test(password) && /\d/.test(password) && /[^A-Za-z0-9]/.test(password) && password.length >= 8;
+}
+
+async function hashPassword(password) {
+  const bytes = new TextEncoder().encode(password);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function generateTemporaryPassword() {
+  const array = new Uint32Array(3);
+  crypto.getRandomValues(array);
+  return `Axn@${array[0].toString(36)}${array[1].toString(36)}${array[2].toString(36)}7`;
+}
+
+function roleLabel(role) {
+  return authConfig.roles[role]?.label || role;
+}
+
+function getInitials(name = "") {
+  const parts = String(name).trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "AX";
+  return parts
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase();
+}
+
+function setAccountMenu(open) {
+  const menu = $("#accountMenu");
+  const button = $("#accountMenuButton");
+  if (!menu || !button) return;
+  menu.classList.toggle("is-hidden", !open);
+  button.setAttribute("aria-expanded", String(open));
+}
+
 function setWorkspace(workspace) {
   state.workspace = workspace;
   state.isLoggedIn = true;
   $("#loginScreen").classList.add("is-hidden");
   $("#appShell").classList.remove("is-hidden");
-  document.body.classList.toggle("patient-mode", workspace === "patient");
+  document.body.classList.toggle("patient-mode", workspace === "customer");
+  document.body.classList.toggle("receptionist-mode", workspace === "receptionist");
   document.body.classList.toggle("doctor-mode", workspace === "doctor");
-  document.querySelector(".patient-care-path").classList.toggle("is-hidden", workspace !== "patient");
+  document.querySelector(".patient-care-path").classList.toggle("is-hidden", workspace !== "customer");
+  document.querySelector(".receptionist-care-path").classList.toggle("is-hidden", workspace !== "receptionist");
   document.querySelector(".doctor-care-path").classList.toggle("is-hidden", workspace !== "doctor");
-  $("#workspaceEyebrow").textContent = workspace === "patient" ? "Patient view" : "Doctor view";
-  $("#workspaceTitle").textContent = workspace === "patient" ? "Start a patient case" : "Doctor case workspace";
-  $("#sessionLabel").textContent = state.currentUser ? `${state.currentUser.name} - ${authConfig.roles[state.currentUser.role].label}` : "Signed in";
-  $("#riskBadge").style.display = workspace === "patient" ? "" : "none";
+  const titles = {
+    customer: ["Customer profile", "Manage patient care"],
+    receptionist: ["Receptionist profile", "Patient registration and booking"],
+    doctor: ["Doctor profile", "Appointments and treatment"],
+  };
+  $("#workspaceEyebrow").textContent = titles[workspace]?.[0] || "Workspace";
+  $("#workspaceTitle").textContent = titles[workspace]?.[1] || "Care workspace";
+  $("#sessionLabel").textContent = state.currentUser?.name || "Signed in";
+  $("#sessionRoleLabel").textContent = state.currentUser ? roleLabel(state.currentUser.role) : "Workspace";
+  $("#accountAvatar").textContent = getInitials(state.currentUser?.name);
+  $("#riskBadge").style.display = workspace === "doctor" ? "none" : "";
+  ensureDefaultMember();
   renderStepVisibility();
   showActiveRolePanel();
+  renderFamilyMembers();
+  renderPersonSelect();
+  renderReports();
+  renderIntakeReportSelect();
+  renderReceptionPatients();
   if (workspace === "doctor") {
     renderDoctorQueue();
     renderPrescriptionList();
     renderMedicineOptions();
+    renderDoctorHistory();
   }
+}
+
+function ensureDefaultMember() {
+  if (state.currentUser?.role !== "customer") return;
+  const data = careStore.read();
+  const existing = data.members.find((member) => member.ownerUserId === state.currentUser.id && member.relation === "Self");
+  if (existing) {
+    if (!state.selectedPersonId) state.selectedPersonId = `member:${existing.id}`;
+    return;
+  }
+  const member = careStore.upsertMember({
+    ownerUserId: state.currentUser.id,
+    name: state.currentUser.name,
+    relation: "Self",
+    age: config.defaultPatient.age,
+    sex: config.defaultPatient.sex,
+    location: state.currentUser.city || config.defaultPatient.location,
+  });
+  state.selectedPersonId = `member:${member.id}`;
 }
 
 function logout() {
   state.isLoggedIn = false;
   state.currentUser = null;
+  clearSession();
+  setAccountMenu(false);
   $("#appShell").classList.add("is-hidden");
   $("#loginScreen").classList.remove("is-hidden");
-  document.body.classList.remove("patient-mode", "doctor-mode");
+  document.body.classList.remove("patient-mode", "receptionist-mode", "doctor-mode");
+  showSignup(false);
 }
 
-function authenticate() {
-  const id = $("#loginId").value.trim() || "PAT-1001";
-  const pin = $("#loginPin").value.trim();
-  const user = authConfig.users.find((item) => item.id.toLowerCase() === id.toLowerCase() && item.pin === pin);
+function showLoggedOutView() {
+  state.isLoggedIn = false;
+  state.currentUser = null;
+  $("#appShell").classList.add("is-hidden");
+  $("#loginScreen").classList.remove("is-hidden");
+  document.body.classList.remove("patient-mode", "receptionist-mode", "doctor-mode");
+  showSignup(false);
+}
+
+async function authenticate() {
+  const id = $("#loginId").value.trim().toLowerCase();
+  const password = $("#loginPassword").value;
+  const passwordHash = await hashPassword(password);
+  const user = getAllUsers().find((item) => {
+    const loginMatches = [item.id, item.email].filter(Boolean).some((value) => value.toLowerCase() === id);
+    return loginMatches && item.passwordHash === passwordHash && item.emailVerified;
+  });
   if (!user) {
-    $("#loginStatus").textContent = "Invalid user ID or PIN. Try PAT-1001 / 1234 or DOC-DEL-01 / 4321.";
+    $("#loginStatus").textContent = "Invalid login or email is not verified. Complete signup verification first.";
     $("#loginStatus").className = "agent-status warning";
     return;
   }
   state.currentUser = user;
   $("#loginStatus").textContent = "Signed in.";
   $("#loginStatus").className = "agent-status";
+  writeSession(user);
   setWorkspace(user.role);
-  if (user.role === "patient") showPatientStage(authConfig.roles.patient.landing);
+  if (user.role === "customer") showPatientStage(authConfig.roles.customer.landing);
+  if (user.role === "receptionist") showReceptionPanel(authConfig.roles.receptionist.landing);
   if (user.role === "doctor") showDoctorPanel(authConfig.roles.doctor.landing);
+  if (user.mustChangePassword) {
+    showChangePassword(true, "Temporary password accepted. Change it before continuing.");
+  }
+}
+
+function restoreSession() {
+  const session = readSession();
+  if (!session) return false;
+  const user = getAllUsers().find((item) => item.email === session.email && item.id === session.userId && item.emailVerified);
+  if (!user) {
+    clearSession();
+    return false;
+  }
+  state.currentUser = user;
+  setWorkspace(user.role);
+  if (user.role === "customer") showPatientStage(authConfig.roles.customer.landing);
+  if (user.role === "receptionist") showReceptionPanel(authConfig.roles.receptionist.landing);
+  if (user.role === "doctor") showDoctorPanel(authConfig.roles.doctor.landing);
+  return true;
+}
+
+function showSignup(show) {
+  $("#loginCard").classList.toggle("is-hidden", show);
+  $("#signupCard").classList.toggle("is-hidden", !show);
+  document.querySelector(".login-grid").classList.add("single-login");
+  $("#loginStatus").textContent = show ? "Complete signup and email verification before signing in." : "Create an account and verify your email before signing in.";
+  $("#loginStatus").className = "agent-status";
+}
+
+async function requestSignupVerification() {
+  const name = $("#signupName").value.trim();
+  const email = $("#signupEmail").value.trim().toLowerCase();
+  const password = $("#signupPassword").value;
+  const role = $("#signupRole").value;
+  if (!name || !email || !password) {
+    $("#signupStatus").textContent = "Name, email, and password are required.";
+    $("#signupStatus").className = "agent-status warning";
+    return;
+  }
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    $("#signupStatus").textContent = "Enter a valid email address.";
+    $("#signupStatus").className = "agent-status warning";
+    return;
+  }
+  if (!passwordMeetsPolicy(password)) {
+    $("#signupStatus").textContent = "Use a stronger password: minimum 8 characters with uppercase, lowercase, number, and symbol.";
+    $("#signupStatus").className = "agent-status warning";
+    return;
+  }
+  if (getAllUsers().some((user) => user.email?.toLowerCase() === email)) {
+    $("#signupStatus").textContent = "This email already exists. Sign in with the same email.";
+    $("#signupStatus").className = "agent-status warning";
+    return;
+  }
+  const prefix = role === "doctor" ? "DOC" : role === "receptionist" ? "REC" : "CUS";
+  const verificationCode = String(Math.floor(100000 + Math.random() * 900000));
+  const record = {
+    id: `${prefix}-${Date.now().toString().slice(-6)}`,
+    email,
+    passwordHash: await hashPassword(password),
+    role,
+    name,
+    phone: $("#signupPhone").value.trim(),
+    city: $("#signupCity").value.trim(),
+    hospital: $("#signupHospital").value.trim(),
+    createdAt: new Date().toISOString(),
+    passwordChangedAt: new Date().toISOString(),
+  };
+  state.pendingSignup = {
+    record,
+    verificationCode,
+    expiresAt: Date.now() + 10 * 60 * 1000,
+  };
+  $("#signupButton").disabled = true;
+  $("#signupStatus").textContent = "Sending verification email...";
+  $("#signupStatus").className = "agent-status";
+  try {
+    const response = await fetch(authConfig.verificationEndpoint || "/api/send-verification", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, name, code: verificationCode }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "Verification email could not be sent.");
+    $("#verificationBox").classList.remove("is-hidden");
+    $("#signupStatus").textContent = data.devMode
+      ? `Local email fallback active. Verification code: ${verificationCode}`
+      : "Verification email sent. Enter the code to activate this account.";
+  } catch (error) {
+    $("#signupStatus").textContent = `${error.message} Configure Gmail API or SMTP on the server, then try again.`;
+    $("#signupStatus").className = "agent-status warning";
+  } finally {
+    $("#signupButton").disabled = false;
+  }
+}
+
+function verifySignup() {
+  if (!state.pendingSignup) {
+    $("#signupStatus").textContent = "Send verification email first.";
+    $("#signupStatus").className = "agent-status warning";
+    return;
+  }
+  if (Date.now() > state.pendingSignup.expiresAt) {
+    $("#signupStatus").textContent = "Verification code expired. Send a new verification email.";
+    $("#signupStatus").className = "agent-status warning";
+    return;
+  }
+  if ($("#verificationCodeInput").value.trim() !== state.pendingSignup.verificationCode) {
+    $("#signupStatus").textContent = "Incorrect verification code.";
+    $("#signupStatus").className = "agent-status warning";
+    return;
+  }
+  const users = readLocalUsers();
+  users.unshift({ ...state.pendingSignup.record, emailVerified: true, verifiedAt: new Date().toISOString() });
+  writeLocalUsers(users);
+  state.pendingSignup = null;
+  $("#signupStatus").textContent = "Email verified. Account created. Use your email and password to sign in.";
+  $("#signupStatus").className = "agent-status";
+  $("#verificationBox").classList.add("is-hidden");
+  $("#verificationCodeInput").value = "";
+  $("#loginId").value = "";
+  $("#loginPassword").value = "";
+}
+
+function goToSigninAfterVerification() {
+  showSignup(false);
+  $("#loginStatus").textContent = "Sign in with your verified email and password.";
+  $("#loginStatus").className = "agent-status";
+  $("#loginId").focus();
+}
+
+async function forgotPassword() {
+  const email = $("#loginId").value.trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    $("#loginStatus").textContent = "Enter your verified email, then use Forgot password.";
+    $("#loginStatus").className = "agent-status warning";
+    return;
+  }
+  const allUsers = getAllUsers();
+  const targetUser = allUsers.find((item) => item.email?.toLowerCase() === email && item.emailVerified);
+  if (!targetUser) {
+    $("#loginStatus").textContent = "No verified account found for this email.";
+    $("#loginStatus").className = "agent-status warning";
+    return;
+  }
+  const users = readLocalUsers();
+  let userIndex = users.findIndex((item) => item.email?.toLowerCase() === email);
+  if (userIndex < 0) {
+    users.unshift({ ...targetUser, seeded: false });
+    userIndex = 0;
+  }
+  const temporaryPassword = generateTemporaryPassword();
+  $("#loginStatus").textContent = "Sending a temporary password to your email...";
+  $("#loginStatus").className = "agent-status";
+  try {
+    const response = await fetch(authConfig.passwordResetEndpoint || "/api/send-password-reset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, name: targetUser.name, temporaryPassword }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "Temporary password email could not be sent.");
+    users[userIndex] = {
+      ...users[userIndex],
+      passwordHash: await hashPassword(temporaryPassword),
+      mustChangePassword: true,
+      passwordResetAt: new Date().toISOString(),
+    };
+    writeLocalUsers(users);
+    $("#loginPassword").value = "";
+    $("#loginStatus").textContent = data.devMode
+      ? `Local email fallback active. Temporary password: ${temporaryPassword}`
+      : "Temporary password sent. Sign in with it and change your password.";
+    $("#loginStatus").className = data.devMode ? "agent-status warning" : "agent-status";
+  } catch (error) {
+    $("#loginStatus").textContent = `${error.message} Configure Gmail API or SMTP on the server, then try again.`;
+    $("#loginStatus").className = "agent-status warning";
+  }
+}
+
+function showChangePassword(show, message = "Use a strong password that is not shared with any other service.") {
+  const panel = $("#changePasswordPanel");
+  if (!panel) return;
+  panel.classList.toggle("is-hidden", !show);
+  $("#changePasswordStatus").textContent = message;
+  $("#changePasswordStatus").className = message.toLowerCase().includes("accepted") ? "agent-status warning" : "agent-status";
+  if (show) $("#oldPasswordInput").focus();
+}
+
+async function changePassword() {
+  if (!state.currentUser) return;
+  const oldPassword = $("#oldPasswordInput").value;
+  const newPassword = $("#newPasswordInput").value;
+  const confirmPassword = $("#confirmPasswordInput").value;
+  if (!oldPassword || !newPassword || !confirmPassword) {
+    $("#changePasswordStatus").textContent = "Current password, new password, and confirmation are required.";
+    $("#changePasswordStatus").className = "agent-status warning";
+    return;
+  }
+  if ((await hashPassword(oldPassword)) !== state.currentUser.passwordHash) {
+    $("#changePasswordStatus").textContent = "Current password is incorrect.";
+    $("#changePasswordStatus").className = "agent-status warning";
+    return;
+  }
+  if (!passwordMeetsPolicy(newPassword)) {
+    $("#changePasswordStatus").textContent = "Use minimum 8 characters with uppercase, lowercase, number, and symbol.";
+    $("#changePasswordStatus").className = "agent-status warning";
+    return;
+  }
+  if (oldPassword === newPassword) {
+    $("#changePasswordStatus").textContent = "New password must be different from the current password.";
+    $("#changePasswordStatus").className = "agent-status warning";
+    return;
+  }
+  if (newPassword !== confirmPassword) {
+    $("#changePasswordStatus").textContent = "New password and confirmation do not match.";
+    $("#changePasswordStatus").className = "agent-status warning";
+    return;
+  }
+  const users = readLocalUsers();
+  let userIndex = users.findIndex((item) => item.id === state.currentUser.id || item.email === state.currentUser.email);
+  if (userIndex < 0) {
+    users.unshift({ ...state.currentUser, seeded: false });
+    userIndex = 0;
+  }
+  const updatedUser = {
+    ...users[userIndex],
+    passwordHash: await hashPassword(newPassword),
+    mustChangePassword: false,
+    passwordChangedAt: new Date().toISOString(),
+  };
+  users[userIndex] = updatedUser;
+  writeLocalUsers(users);
+  state.currentUser = updatedUser;
+  writeSession(updatedUser);
+  $("#oldPasswordInput").value = "";
+  $("#newPasswordInput").value = "";
+  $("#confirmPasswordInput").value = "";
+  $("#changePasswordStatus").textContent = "Password updated.";
+  $("#changePasswordStatus").className = "agent-status";
+  window.setTimeout(() => showChangePassword(false), 900);
+}
+
+function getWalletReportsForSelectedPerson() {
+  const data = careStore.read();
+  if (!state.selectedPersonId) return [];
+  return (data.reports || []).filter((report) => report.personId === state.selectedPersonId);
+}
+
+function getSelectedReportsForCase() {
+  const walletReports = getWalletReportsForSelectedPerson();
+  if (!state.selectedReportIds.length) return [];
+  return walletReports.filter((report) => state.selectedReportIds.includes(report.id));
+}
+
+function appointmentCasesForReception() {
+  const data = careStore.read();
+  const hospital = state.currentUser?.hospital || "";
+  if (state.workspace !== "receptionist" || !hospital) return [];
+  const hospitalAppointments = (data.appointments || []).filter((appointment) => appointment.hospitalName === hospital);
+  const caseIds = new Set(hospitalAppointments.map((appointment) => appointment.caseId));
+  return (data.cases || []).filter((caseItem) => caseIds.has(caseItem.id));
+}
+
+function latestCaseForPerson(personId = state.selectedPersonId) {
+  if (!personId) return null;
+  const data = careStore.read();
+  return (data.cases || []).find((caseItem) => caseItem.personId === personId);
 }
 
 function unlockStages(stages) {
@@ -157,7 +567,22 @@ function showPatientStage(stage) {
   state.activePatientStage = stage;
   renderStepVisibility();
   updateCarePath(stage, state.unlockedStages.filter((item) => item !== stage));
-  document.querySelector(`[data-stage-panel="${stage}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function showReceptionPanel(panelName) {
+  state.activeReceptionPanel = panelName;
+  const sharedPanels = new Set(["intake", "reports", "triage", "followup", "routing", "appointments"]);
+  document.querySelectorAll(".receptionist-panel-view").forEach((panel) => {
+    panel.classList.toggle("is-hidden", panel.dataset.panel !== panelName);
+  });
+  document.querySelectorAll("[data-stage-panel]").forEach((panel) => {
+    panel.classList.toggle("is-locked", !sharedPanels.has(panel.dataset.stagePanel) || panel.dataset.stagePanel !== panelName);
+  });
+  document.querySelectorAll(".receptionist-care-path .path-step").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.view === panelName);
+  });
+  window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 function showDoctorPanel(panelName) {
@@ -168,15 +593,221 @@ function showDoctorPanel(panelName) {
   document.querySelectorAll(".doctor-care-path .path-step").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.view === panelName);
   });
-  document.querySelector(`[data-panel="${panelName}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 function showActiveRolePanel() {
-  if (state.workspace === "patient") {
+  if (state.workspace === "customer") {
     renderStepVisibility();
+  } else if (state.workspace === "receptionist") {
+    showReceptionPanel(state.activeReceptionPanel);
   } else {
     showDoctorPanel(state.activeDoctorPanel);
   }
+}
+
+function renderFamilyMembers() {
+  const data = careStore.read();
+  const panel = $("#familyMemberList");
+  if (!panel) return;
+  const members = data.members.filter((member) => !member.ownerUserId || member.ownerUserId === state.currentUser?.id);
+  if (!members.length) {
+    panel.className = "stack empty-state";
+    panel.textContent = "No patients added yet.";
+    return;
+  }
+  panel.className = "stack";
+  panel.innerHTML = members
+    .map(
+      (member) => `
+        <button class="case-card ${member.id === state.selectedPersonId ? "is-selected" : ""}" type="button" data-member-id="${escapeHtml(member.id)}">
+          <strong>${escapeHtml(member.name)}</strong>
+          <span>${escapeHtml(member.relation || "Patient")} | ${escapeHtml(member.age || "")} ${escapeHtml(member.sex || "")}</span>
+          <span>${escapeHtml(member.location || "")}</span>
+        </button>
+      `
+    )
+    .join("");
+  document.querySelectorAll("[data-member-id]").forEach((button) => {
+    button.addEventListener("click", () => selectPerson(button.dataset.memberId, "member"));
+  });
+}
+
+function renderReceptionPatients() {
+  const data = careStore.read();
+  const panel = $("#receptionPatientList");
+  if (!panel) return;
+  const hospital = state.currentUser?.hospital;
+  const patients = data.patients.filter((patient) => !hospital || !patient.hospital || patient.hospital === hospital);
+  const bookedCasePersonIds = new Set(appointmentCasesForReception().map((caseItem) => caseItem.personId));
+  const bookedMembers = data.members.filter((member) => bookedCasePersonIds.has(`member:${member.id}`));
+  const combined = [
+    ...patients.map((patient) => ({ ...patient, type: "patient" })),
+    ...bookedMembers.map((member) => ({ ...member, type: "member", phone: member.relation || "customer booking", city: member.location || "" })),
+  ];
+  if (!combined.length) {
+    panel.className = "stack empty-state";
+    panel.textContent = "No patients registered or booked for this hospital yet.";
+    return;
+  }
+  panel.className = "stack";
+  panel.innerHTML = combined
+    .map(
+      (patient) => `
+        <button class="case-card ${`${patient.type}:${patient.id}` === state.selectedPersonId ? "is-selected" : ""}" type="button" data-reception-person="${escapeHtml(`${patient.type}:${patient.id}`)}">
+          <strong>${escapeHtml(patient.name)}</strong>
+          <span>${escapeHtml(patient.phone || "No mobile")} · ${escapeHtml(patient.age || "")} ${escapeHtml(patient.sex || "")}</span>
+          <span>${escapeHtml(patient.city || "")}</span>
+        </button>
+      `
+    )
+    .join("");
+  document.querySelectorAll("[data-reception-person]").forEach((button) => {
+    button.addEventListener("click", () => handlePersonSelectChange(button.dataset.receptionPerson));
+  });
+}
+
+function renderPersonSelect() {
+  const selects = ["#casePersonSelect", "#intakePersonSelect"].map((selector) => $(selector)).filter(Boolean);
+  if (!selects.length) return;
+  const data = careStore.read();
+  const bookedCasePersonIds = new Set(appointmentCasesForReception().map((caseItem) => caseItem.personId));
+  const members = data.members.filter((member) =>
+    state.workspace === "receptionist"
+      ? bookedCasePersonIds.has(`member:${member.id}`)
+      : !member.ownerUserId || member.ownerUserId === state.currentUser?.id
+  );
+  const patients = data.patients.filter((patient) => state.workspace !== "receptionist" || !state.currentUser?.hospital || patient.hospital === state.currentUser.hospital);
+  const options = [
+    ...members.map((member) => ({ value: `member:${member.id}`, label: `${member.name} (${member.relation || "patient"})` })),
+    ...patients.map((patient) => ({ value: `patient:${patient.id}`, label: `${patient.name} (${patient.phone || "walk-in"})` })),
+  ];
+  const markup = `<option value="">Current patient</option>${options.map((item) => `<option value="${escapeHtml(item.value)}">${escapeHtml(item.label)}</option>`).join("")}`;
+  selects.forEach((select) => {
+    select.innerHTML = markup;
+    if (state.selectedPersonId) select.value = state.selectedPersonId;
+  });
+}
+
+function saveFamilyMember() {
+  const name = $("#memberNameInput").value.trim();
+  if (!name) {
+    setAgentStatus("Enter patient name before saving.", "warning");
+    return;
+  }
+  const member = careStore.upsertMember({
+    ownerUserId: state.currentUser?.id,
+    name,
+    age: Number($("#memberAgeInput").value || 0),
+    sex: $("#memberSexInput").value,
+    relation: $("#memberRelationInput").value.trim(),
+    location: $("#memberLocationInput").value.trim() || state.currentUser?.city || config.defaultPatient.location,
+  });
+  selectPerson(member.id, "member");
+  ["#memberNameInput", "#memberAgeInput", "#memberRelationInput", "#memberLocationInput"].forEach((selector) => {
+    const input = $(selector);
+    if (input) input.value = "";
+  });
+  renderFamilyMembers();
+  renderPersonSelect();
+  renderReports();
+  renderIntakeReportSelect();
+  setAgentStatus("Patient saved. Reports and symptoms can now be attached to this profile.");
+}
+
+function saveReceptionPatient() {
+  const name = $("#receptionPatientName").value.trim();
+  if (!name) {
+    setAgentStatus("Enter patient name before saving.", "warning");
+    return;
+  }
+  const patient = careStore.upsertPatient({
+    name,
+    phone: $("#receptionPatientPhone").value.trim(),
+    age: Number($("#receptionPatientAge").value || 0),
+    sex: $("#receptionPatientSex").value,
+    city: $("#receptionPatientCity").value.trim() || state.currentUser?.city || "",
+    hospital: state.currentUser?.hospital || "",
+    createdByUserId: state.currentUser?.id,
+  });
+  selectPerson(patient.id, "patient");
+  ["#receptionPatientName", "#receptionPatientPhone", "#receptionPatientAge", "#receptionPatientCity"].forEach((selector) => {
+    const input = $(selector);
+    if (input) input.value = "";
+  });
+  renderReceptionPatients();
+  renderPersonSelect();
+  setAgentStatus("Patient saved for reception workflow.");
+}
+
+function selectPerson(id, type) {
+  const key = `${type}:${id}`;
+  state.selectedPersonId = key;
+  if (type === "patient") state.selectedReceptionPatientId = id;
+  const data = careStore.read();
+  const person = type === "member" ? data.members.find((item) => item.id === id) : data.patients.find((item) => item.id === id);
+  if (!person) return;
+  $("#ageInput").value = String(person.age || config.defaultPatient.age);
+  $("#sexInput").value = person.sex || config.defaultPatient.sex;
+  $("#locationInput").value = person.location || person.city || config.defaultPatient.location;
+  const availableReportIds = getWalletReportsForSelectedPerson().map((report) => report.id);
+  state.selectedReportIds = state.selectedReportIds.filter((id) => availableReportIds.includes(id));
+  const latestCase = latestCaseForPerson(key);
+  if (state.workspace === "receptionist" && latestCase?.patientContext?.symptoms) {
+    $("#symptomInput").value = latestCase.patientContext.symptoms;
+    state.selectedReportIds = (latestCase.reports || []).map((report) => report.id).filter(Boolean);
+  }
+  state.reports = getSelectedReportsForCase();
+  renderFamilyMembers();
+  renderReceptionPatients();
+  renderPersonSelect();
+  renderReports();
+  renderIntakeReportSelect();
+}
+
+function handlePersonSelectChange(value) {
+  const [type, id] = String(value || "").split(":");
+  if (type && id) selectPerson(id, type);
+}
+
+function handleIntakeReportSelection() {
+  const select = $("#intakeReportSelect");
+  if (!select) return;
+  state.selectedReportIds = Array.from(select.selectedOptions).map((option) => option.value).filter(Boolean);
+  state.reports = getSelectedReportsForCase();
+  renderReports();
+  setAgentStatus(
+    state.selectedReportIds.length
+      ? `${state.selectedReportIds.length} report${state.selectedReportIds.length === 1 ? "" : "s"} selected for triage.`
+      : "No reports selected for triage. Symptoms and patient details will still be used."
+  );
+}
+
+function setAllReportsSelected(selected) {
+  const reports = getWalletReportsForSelectedPerson();
+  state.selectedReportIds = selected ? reports.map((report) => report.id) : [];
+  state.reports = getSelectedReportsForCase();
+  renderIntakeReportSelect();
+  renderReports();
+  setAgentStatus(selected ? "All available reports selected for triage." : "Reports cleared for this triage.");
+}
+
+function renderIntakeReportSelect() {
+  const select = $("#intakeReportSelect");
+  if (!select) return;
+  const reports = getWalletReportsForSelectedPerson();
+  if (!reports.length) {
+    select.innerHTML = `<option value="">No reports in wallet for selected patient</option>`;
+    select.disabled = true;
+    return;
+  }
+  select.disabled = false;
+  select.innerHTML = reports
+    .map((report) => `<option value="${escapeHtml(report.id)}">${escapeHtml(report.reportType || "Report")} - ${escapeHtml(report.name)}</option>`)
+    .join("");
+  Array.from(select.options).forEach((option) => {
+    option.selected = state.selectedReportIds.includes(option.value);
+  });
 }
 
 function renderChips() {
@@ -307,13 +938,15 @@ function getDoctorFilters() {
   const cityElement = $("#doctorCityInput");
   const hospitalElement = $("#doctorHospitalInput");
   const radiusElement = $("#doctorRadiusInput");
+  const forcedHospital = state.workspace === "receptionist" && state.currentUser?.hospital ? state.currentUser.hospital : "";
+  const hospital = forcedHospital || (hospitalElement ? hospitalElement.value : state.doctorFilters.hospital);
   const cityValue = cityElement ? cityElement.value : state.doctorFilters.city || extractCity($("#locationInput")?.value);
-  const hospital = hospitalElement ? hospitalElement.value : state.doctorFilters.hospital;
+  const radiusKm = hospital ? 0 : Number(radiusElement ? radiusElement.value : state.doctorFilters.radiusKm || 0);
   const filters = {
     specialty: specialtyElement ? specialtyElement.value : state.doctorFilters.specialty || getTopRoute(),
     city: appointmentService.canonicalCity(cityValue),
     hospital,
-    radiusKm: Number(radiusElement ? radiusElement.value : state.doctorFilters.radiusKm || 0),
+    radiusKm,
   };
   if (filters.hospital) {
     return {
@@ -342,8 +975,15 @@ function setDoctorFilters(nextFilters = {}) {
     $("#doctorSpecialtyInput").value = specialty;
   }
   if ($("#doctorCityInput")) $("#doctorCityInput").value = appointmentService.canonicalCity(state.doctorFilters.city || extractCity($("#locationInput")?.value));
-  if ($("#doctorHospitalInput")) $("#doctorHospitalInput").value = state.doctorFilters.hospital || "";
-  if ($("#doctorRadiusInput")) $("#doctorRadiusInput").value = String(state.doctorFilters.radiusKm || 0);
+  if ($("#doctorHospitalInput")) {
+    $("#doctorHospitalInput").value = state.workspace === "receptionist" && state.currentUser?.hospital ? state.currentUser.hospital : state.doctorFilters.hospital || "";
+    $("#doctorHospitalInput").disabled = state.workspace === "receptionist" && Boolean(state.currentUser?.hospital);
+  }
+  if ($("#doctorRadiusInput")) {
+    const lockedToHospital = Boolean(state.workspace === "receptionist" && state.currentUser?.hospital) || Boolean($("#doctorHospitalInput")?.value);
+    $("#doctorRadiusInput").value = lockedToHospital ? "0" : String(state.doctorFilters.radiusKm || 0);
+    $("#doctorRadiusInput").disabled = lockedToHospital;
+  }
 }
 
 function renderDoctorSearchOptions() {
@@ -365,7 +1005,9 @@ function renderDoctorSearchOptions() {
 
   const hospitalSelect = $("#doctorHospitalInput");
   if (hospitalSelect) {
-    const hospitals = appointmentService.listHospitals();
+    const hospitals = state.workspace === "receptionist" && state.currentUser?.hospital
+      ? appointmentService.listHospitals().filter((hospital) => hospital.name === state.currentUser.hospital)
+      : appointmentService.listHospitals();
     hospitalSelect.innerHTML = `<option value="">Any hospital</option>${hospitals
       .map((hospital) => `<option value="${escapeHtml(hospital.name)}">${escapeHtml(hospital.name)} - ${escapeHtml(hospital.area)}, ${escapeHtml(hospital.city)}</option>`)
       .join("")}`;
@@ -382,22 +1024,34 @@ function renderDoctorSearchOptions() {
 
 function renderReports() {
   const panel = $("#reportList");
-  if (!state.reports.length) {
+  const walletReports = getWalletReportsForSelectedPerson();
+  if (!walletReports.length) {
     panel.className = "mini-list empty-state";
-    panel.textContent = "No reports uploaded.";
+    panel.textContent = state.selectedPersonId ? "No reports uploaded for this patient." : "Select a patient before uploading reports.";
     return;
   }
 
   panel.className = "mini-list stack";
-  panel.innerHTML = state.reports
-    .map((report) => `<div><strong>${escapeHtml(report.name)}</strong><p>${escapeHtml(report.status)} · ${Math.ceil(report.size / 1024)} KB</p></div>`)
+  panel.innerHTML = walletReports
+    .map((report) => `<div><strong>${escapeHtml(report.name)}</strong><p>${escapeHtml(report.reportType || "Report")} · ${escapeHtml(report.status)} · ${Math.ceil(report.size / 1024)} KB</p></div>`)
     .join("");
 }
 
 async function handleReportUpload(event) {
-  state.reports = await reportService.parseFiles(event.target.files);
+  if (!state.selectedPersonId) {
+    setAgentStatus("Select a patient before uploading reports.", "warning");
+    return;
+  }
+  const parsedReports = await reportService.parseFiles(event.target.files);
+  const savedReports = careStore.addReports(parsedReports.map((report) => ({
+    ...report,
+    personId: $("#casePersonSelect")?.value || state.selectedPersonId,
+    reportType: $("#reportTypeInput")?.value || "Report",
+  })));
+  state.reports = getSelectedReportsForCase();
   renderReports();
-  setAgentStatus(`${state.reports.length} report file${state.reports.length === 1 ? "" : "s"} attached to this case.`);
+  renderIntakeReportSelect();
+  setAgentStatus(`${savedReports.length} report file${savedReports.length === 1 ? "" : "s"} added to the patient wallet. Select specific reports in Intake before triage.`);
 }
 
 function saveCurrentCase() {
@@ -405,7 +1059,10 @@ function saveCurrentCase() {
   const record = careStore.upsertCase({
     id: state.currentCaseId,
     patientContext: state.lastContext,
-    reports: state.reports,
+    personId: state.selectedPersonId,
+    createdByUserId: state.currentUser?.id,
+    createdByRole: state.workspace,
+    reports: getSelectedReportsForCase(),
     extractedSymptoms: state.extracted,
     possibleConditions: state.results,
     urgent: state.urgent,
@@ -444,7 +1101,7 @@ function renderAppointmentOptions() {
   panel.innerHTML = `
     <div class="agent-status">
       ${state.hasRun ? "" : "Directory search only. Run triage first to prefill the recommended specialty. "}
-      Search #${state.doctorSearchCount}: showing ${doctors.length} doctor${doctors.length === 1 ? "" : "s"} for ${escapeHtml(selectedSpecialty)} ${escapeHtml(searchScope)}.
+      Search #${state.doctorSearchCount}: showing ${doctors.length} integrated doctor${doctors.length === 1 ? "" : "s"} for ${escapeHtml(selectedSpecialty)} ${escapeHtml(searchScope)}.
       <a href="${externalSearchUrl}" target="_blank" rel="noreferrer">Open external directory search</a>
     </div>
     ${
@@ -491,6 +1148,9 @@ function bookAppointment(doctorId, slot) {
   const doctor = state.lastDoctorResults.find((item) => item.id === doctorId) || appointmentService.findDoctorById(doctorId);
   const appointment = careStore.addAppointment({
     caseId: caseRecord.id,
+    personId: state.selectedPersonId,
+    bookedByUserId: state.currentUser?.id,
+    bookedByRole: state.workspace,
     doctorId,
     doctorName: doctor?.name || "",
     hospitalName: doctor?.hospitalName || "",
@@ -508,14 +1168,19 @@ function bookAppointment(doctorId, slot) {
 function renderDoctorQueue() {
   const data = careStore.read();
   const panel = $("#doctorQueue");
-  const appointments = data.appointments || [];
+  const doctorHospital = state.currentUser?.hospital || "";
+  const appointments = (data.appointments || []).filter((appointment) => {
+    if (state.workspace !== "doctor") return true;
+    if (appointment.doctorName === state.currentUser?.name) return true;
+    return doctorHospital && appointment.hospitalName === doctorHospital;
+  });
   if (!appointments.length) {
     panel.className = "stack empty-state";
     panel.textContent = "Appointments will appear here after patients book a slot.";
     return;
   }
 
-  panel.className = "stack";
+  panel.className = "appointment-list";
   panel.innerHTML = appointments
     .map((appointment) => {
       const caseItem = data.cases.find((item) => item.id === appointment.caseId);
@@ -551,14 +1216,15 @@ function selectDoctorCase(caseId) {
   details.innerHTML = `
     <article class="case-card">
       <strong>${escapeHtml(caseItem.route)}</strong>
-      <p>${escapeHtml(caseItem.patientContext?.symptoms || "")}</p>
-      <p>${escapeHtml(reportService.summarize(caseItem.reports || []))}</p>
+      <p><strong>Symptoms:</strong> ${escapeHtml(caseItem.patientContext?.symptoms || "")}</p>
+      <p><strong>Reports:</strong> ${escapeHtml(reportService.summarize(caseItem.reports || []))}</p>
+      <p><strong>Follow-up answers:</strong> ${escapeHtml((caseItem.followupAnswers || []).map((item) => `${item.question}: ${item.answer}`).join(" | ") || "None")}</p>
       <div class="tag-row">${(caseItem.extractedSymptoms || []).map((item) => `<span class="tag">${escapeHtml(item)}</span>`).join("")}</div>
     </article>
   `;
   $("#prescriptionInput").value = "";
   renderPrescriptionList();
-  renderMedicineOptions();
+  renderDoctorHistory();
 }
 
 function saveDoctorInput() {
@@ -588,6 +1254,7 @@ function saveDoctorInput() {
   }
   setAgentStatus("Doctor input saved to the patient case.");
   renderDoctorQueue();
+  renderDoctorHistory();
   renderPatientTreatment();
 }
 
@@ -606,6 +1273,32 @@ function renderPrescriptionList() {
     .join("");
 }
 
+function renderDoctorHistory() {
+  const panel = $("#doctorHistoryPanel");
+  if (!panel) return;
+  if (!state.selectedDoctorCaseId) {
+    panel.className = "stack empty-state";
+    panel.textContent = "Select a booked patient from Appointments to see history.";
+    return;
+  }
+  const data = careStore.read();
+  const caseItem = data.cases.find((item) => item.id === state.selectedDoctorCaseId);
+  const appointments = data.appointments.filter((item) => item.caseId === state.selectedDoctorCaseId);
+  const prescriptions = data.prescriptions.filter((item) => item.caseId === state.selectedDoctorCaseId);
+  const doctorInputs = data.doctorInputs.filter((item) => item.caseId === state.selectedDoctorCaseId);
+  panel.className = "stack";
+  panel.innerHTML = `
+    <article class="case-card">
+      <strong>${escapeHtml(caseItem?.route || "Selected case")}</strong>
+      <p>${escapeHtml(caseItem?.patientContext?.symptoms || "No symptoms recorded")}</p>
+      <p>${escapeHtml(reportService.summarize(caseItem?.reports || []))}</p>
+    </article>
+    ${appointments.map((item) => `<article class="case-card"><strong>${escapeHtml(item.slot)}</strong><p>${escapeHtml(item.doctorName)} · ${escapeHtml(item.hospitalName)} · ${escapeHtml(item.status)}</p></article>`).join("")}
+    ${doctorInputs.map((item) => `<article class="case-card"><strong>Doctor note</strong><p>${escapeHtml(item.note || "No note")}</p><p>${escapeHtml(item.reportRequests || "No additional reports")}</p></article>`).join("")}
+    ${prescriptions.map((item) => `<article class="case-card"><strong>Prescription</strong><p>${escapeHtml(item.text || item.fileName || "Prescription uploaded")}</p></article>`).join("")}
+  `;
+}
+
 async function savePrescription() {
   if (!state.selectedDoctorCaseId) {
     setAgentStatus("Select a patient case before saving a prescription.", "warning");
@@ -620,9 +1313,9 @@ async function savePrescription() {
     fileType: file?.type || "",
   });
   renderPrescriptionList();
-  renderMedicineOptions(text);
+  renderDoctorHistory();
   renderPatientTreatment();
-  setAgentStatus("Prescription saved. Medicine options updated where salt matches were found.");
+  setAgentStatus("Prescription saved for the selected patient case.");
 }
 
 function renderMedicineOptions(prescriptionText = "") {
@@ -644,6 +1337,47 @@ function renderMedicineOptions(prescriptionText = "") {
           <strong>${escapeHtml(match.salt)}</strong>
           ${match.brands
             .map((brand) => `<div class="price-row"><span>${escapeHtml(brand.brand)} · ${escapeHtml(brand.company)} · ${escapeHtml(brand.unit)}</span><strong>₹${brand.price}</strong></div>`)
+            .join("")}
+        </article>
+      `
+    )
+    .join("");
+}
+
+function renderMedicineSearch() {
+  const panel = $("#medicineSearchList");
+  const input = $("#medicineSearchInput");
+  if (!panel || !input) return;
+  const query = input.value.trim();
+  if (!query) {
+    panel.className = "stack empty-state";
+    panel.textContent = "Search a salt or brand to see matching medicine options.";
+    return;
+  }
+  const matches = medicineService.findMatches(query);
+  if (!matches.length) {
+    panel.className = "stack empty-state";
+    panel.textContent = "No matching salt found in the configured medicine catalog. Try another salt or brand name.";
+    return;
+  }
+  panel.className = "stack";
+  panel.innerHTML = matches
+    .map(
+      (match) => `
+        <article class="medicine-card">
+          <strong>${escapeHtml(match.salt)}</strong>
+          ${match.brands
+            .map(
+              (brand) => `
+                <div class="price-row medicine-result-row">
+                  <span>
+                    <b>${escapeHtml(brand.brand)}</b>
+                    <small>Company: ${escapeHtml(brand.company)} | Pack: ${escapeHtml(brand.unit)}</small>
+                  </span>
+                  <strong>Rs ${brand.price}</strong>
+                </div>
+              `
+            )
             .join("")}
         </article>
       `
@@ -828,6 +1562,7 @@ function clearSearch() {
   state.results = [];
   state.urgent = [];
   state.reports = [];
+  state.selectedReportIds = [];
   state.provider = "rules";
   state.model = config.llm.defaultModel;
   state.followupQuestions = [];
@@ -843,7 +1578,8 @@ function clearSearch() {
     hospital: "",
     radiusKm: 0,
   };
-  state.unlockedStages = ["intake"];
+  state.unlockedStages = ["members", "reports", "intake", "medicineSearch"];
+  state.activePatientStage = state.workspace === "customer" ? "intake" : state.activePatientStage;
   $("#feedbackNote").value = "";
   $("#saveConsent").checked = false;
   $("#reportInput").value = "";
@@ -852,8 +1588,10 @@ function clearSearch() {
   renderQuestions();
   renderDoctorRouting();
   renderReports();
+  renderIntakeReportSelect();
   renderDoctorSearchOptions();
   renderAppointmentOptions();
+  renderPersonSelect();
   setFeedbackEnabled(false);
   updateCarePath("intake", []);
   renderStepVisibility();
@@ -958,10 +1696,13 @@ function setupNavigation() {
 
   document.querySelectorAll(".doctor-care-path .path-step").forEach((button) => {
     button.addEventListener("click", () => {
-      document.querySelectorAll(".doctor-care-path .path-step").forEach((item) => item.classList.remove("is-active"));
-      button.classList.add("is-active");
-      const target = document.querySelector(`[data-panel="${button.dataset.view}"]`);
-      if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+      showDoctorPanel(button.dataset.view);
+    });
+  });
+
+  document.querySelectorAll(".receptionist-care-path .path-step").forEach((button) => {
+    button.addEventListener("click", () => {
+      showReceptionPanel(button.dataset.view);
     });
   });
 
@@ -999,32 +1740,33 @@ function bind(selector, eventName, handler) {
 
 function bindLoginControls() {
   bind("#loginButton", "click", authenticate);
-  bind("#loginPin", "keydown", (event) => {
+  bind("#openSignupButton", "click", () => showSignup(true));
+  bind("#forgotPasswordButton", "click", forgotPassword);
+  bind("#signupButton", "click", requestSignupVerification);
+  bind("#verifySignupButton", "click", verifySignup);
+  bind("#goToSigninButton", "click", goToSigninAfterVerification);
+  bind("#loginPassword", "keydown", (event) => {
     if (event.key === "Enter") authenticate();
-  });
-  document.querySelectorAll("[data-demo-login]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const user = button.dataset.demoLogin === "doctor" ? authConfig.users.find((item) => item.role === "doctor") : authConfig.users.find((item) => item.role === "patient");
-      if (!user) return;
-      $("#loginId").value = user.id;
-      $("#loginPin").value = user.pin;
-      authenticate();
-    });
   });
 }
 
 function bootApp() {
   bindLoginControls();
-  logout();
+  showLoggedOutView();
   try {
     initializeDefaults();
     renderChips();
+    renderFamilyMembers();
+    renderReceptionPatients();
+    renderPersonSelect();
     renderReports();
+    renderIntakeReportSelect();
     renderAppointmentOptions();
     renderDoctorQueue();
     renderPrescriptionList();
     renderMedicineOptions();
     renderPatientTreatment();
+    renderMedicineSearch();
     renderDatasetStats();
     setFeedbackEnabled(false);
     setupVoice();
@@ -1052,10 +1794,45 @@ function bootApp() {
       setDoctorFilters({ ...getDoctorFilters(), hospital: "" });
       renderDoctorSearchOptions();
     });
+    bind("#doctorHospitalInput", "change", () => {
+      if ($("#doctorHospitalInput").value) {
+        setDoctorFilters({ ...getDoctorFilters(), radiusKm: 0 });
+      }
+      renderDoctorSearchOptions();
+    });
+    bind("#doctorRadiusInput", "change", () => {
+      if (Number($("#doctorRadiusInput").value || 0) > 0 && $("#doctorHospitalInput") && state.workspace !== "receptionist") {
+        $("#doctorHospitalInput").value = "";
+      }
+      setDoctorFilters({ ...getDoctorFilters(), hospital: "", radiusKm: Number($("#doctorRadiusInput").value || 0) });
+      renderDoctorSearchOptions();
+    });
+    bind("#selectAllReportsButton", "click", () => setAllReportsSelected(true));
+    bind("#clearSelectedReportsButton", "click", () => setAllReportsSelected(false));
+    bind("#accountMenuButton", "click", () => setAccountMenu($("#accountMenu")?.classList.contains("is-hidden")));
+    document.addEventListener("click", (event) => {
+      if (!$("#accountMenu") || $("#accountMenu").classList.contains("is-hidden")) return;
+      if (!event.target.closest(".session-switch")) setAccountMenu(false);
+    });
     bind("#logoutButton", "click", logout);
+    bind("#openChangePasswordButton", "click", () => {
+      setAccountMenu(false);
+      showChangePassword(true);
+    });
+    bind("#cancelChangePasswordButton", "click", () => showChangePassword(false));
+    bind("#changePasswordButton", "click", changePassword);
+    bind("#saveMemberButton", "click", saveFamilyMember);
+    bind("#saveReceptionPatientButton", "click", saveReceptionPatient);
+    bind("#casePersonSelect", "change", () => handlePersonSelectChange($("#casePersonSelect").value));
+    bind("#intakePersonSelect", "change", () => handlePersonSelectChange($("#intakePersonSelect").value));
+    bind("#intakeReportSelect", "change", handleIntakeReportSelection);
     bind("#reportInput", "change", handleReportUpload);
     bind("#saveDoctorInputButton", "click", saveDoctorInput);
     bind("#savePrescriptionButton", "click", savePrescription);
+    bind("#searchMedicineButton", "click", renderMedicineSearch);
+    bind("#medicineSearchInput", "keydown", (event) => {
+      if (event.key === "Enter") renderMedicineSearch();
+    });
     bind("#thumbsUpButton", "click", () => submitFeedback("up"));
     bind("#thumbsDownButton", "click", () => submitFeedback("down"));
     bind("#exportDatasetButton", "click", exportDataset);
@@ -1070,6 +1847,7 @@ function bootApp() {
     bind("#modelSelect", "change", () => {
       setAgentStatus("Assessment profile updated. Run triage to use it.");
     });
+    restoreSession();
   } catch (error) {
     console.error(error);
     const loginStatus = $("#loginStatus");

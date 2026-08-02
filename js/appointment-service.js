@@ -135,6 +135,10 @@ window.createAppointmentService = function createAppointmentService(hospitalConf
     return listAllDoctors().find((doctor) => doctor.id === doctorId);
   }
 
+  function hospitalByName(hospitalName) {
+    return (hospitalConfig.hospitals || []).find((hospital) => normalize(hospital.name) === normalize(hospitalName));
+  }
+
   function cityForHospital(hospitalName) {
     const hospital = listHospitals().find((item) => normalize(item.name) === normalize(hospitalName));
     return hospital?.city || "";
@@ -151,6 +155,7 @@ window.createAppointmentService = function createAppointmentService(hospitalConf
   return {
     findDoctors,
     findDoctorById,
+    hospitalByName,
     listCities,
     listHospitals,
     listSpecialties,

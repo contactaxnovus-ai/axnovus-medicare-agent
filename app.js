@@ -155,6 +155,21 @@ function setAgentStatus(message, tone = "info") {
   status.className = `agent-status ${tone === "info" ? "" : tone}`.trim();
 }
 
+function showBookingToast(message) {
+  const toast = $("#bookingToast");
+  if (!toast) {
+    window.alert(message);
+    return;
+  }
+  toast.innerHTML = `
+    <strong>Appointment booked</strong>
+    <span>${escapeHtml(message)}</span>
+  `;
+  toast.classList.remove("is-hidden");
+  window.clearTimeout(showBookingToast.timer);
+  showBookingToast.timer = window.setTimeout(() => toast.classList.add("is-hidden"), 5200);
+}
+
 function readLocalUsers() {
   try {
     return JSON.parse(localStorage.getItem(authConfig.localUserStorageKey || "axnovus-care-users-v1") || "[]");
@@ -670,6 +685,17 @@ function latestCaseForPerson(personId = state.selectedPersonId) {
   if (!personId) return null;
   const data = careStore.read();
   return (data.cases || []).find((caseItem) => caseItem.personId === personId);
+}
+
+function patientNameForPersonId(personId, data = careStore.read()) {
+  const [type, id] = String(personId || "").split(":");
+  if (type === "member") return data.members.find((item) => item.id === id)?.name || "Customer patient";
+  if (type === "patient") return data.patients.find((item) => item.id === id)?.name || "Walk-in patient";
+  return "Patient";
+}
+
+function caseHasDoctorReview(caseId, data = careStore.read()) {
+  return (data.doctorInputs || []).some((item) => item.caseId === caseId) || (data.prescriptions || []).some((item) => item.caseId === caseId);
 }
 
 function unlockStages(stages) {
@@ -1318,7 +1344,8 @@ async function renderAppointmentOptions() {
   const selectedSpecialty = filters.specialty || getTopRoute();
   const doctors = appointmentService.findDoctors(selectedSpecialty, filters);
   state.lastDoctorResults = doctors;
-  const googleResult = await fetchGoogleDoctorResults(selectedSpecialty, filters);
+  const useExternalDiscovery = state.workspace !== "receptionist";
+  const googleResult = useExternalDiscovery ? await fetchGoogleDoctorResults(selectedSpecialty, filters) : { configured: true, places: [] };
   const googlePlaces = googleResult.places || [];
   const externalSearchUrl = appointmentService.buildExternalSearchUrl({
     specialty: selectedSpecialty,
@@ -1337,9 +1364,10 @@ async function renderAppointmentOptions() {
   panel.innerHTML = `
     <div class="agent-status">
       ${state.hasRun ? "" : "Directory search only. Run triage first to prefill the recommended specialty. "}
-      Search #${state.doctorSearchCount}: showing ${doctors.length} integrated doctor${doctors.length === 1 ? "" : "s"} and ${googlePlaces.length} Google Maps result${googlePlaces.length === 1 ? "" : "s"} for ${escapeHtml(selectedSpecialty)} ${escapeHtml(searchScope)}.
+      Search #${state.doctorSearchCount}: showing ${doctors.length} integrated doctor${doctors.length === 1 ? "" : "s"}${useExternalDiscovery ? ` and ${googlePlaces.length} Google Maps result${googlePlaces.length === 1 ? "" : "s"}` : ""} for ${escapeHtml(selectedSpecialty)} ${escapeHtml(searchScope)}.
+      ${state.workspace === "receptionist" ? "Only doctors in this hospital network are shown for receptionist booking." : ""}
       ${googleResult.configured === false ? "Google Maps API is not configured on this server." : ""}
-      <a href="${externalSearchUrl}" target="_blank" rel="noreferrer">Open browser search</a>
+      ${useExternalDiscovery ? `<a href="${externalSearchUrl}" target="_blank" rel="noreferrer">Open browser search</a>` : ""}
     </div>
     ${
       doctors.length
@@ -1374,9 +1402,10 @@ async function renderAppointmentOptions() {
   panel.innerHTML = `
     <div class="agent-status">
       ${state.hasRun ? "" : "Directory search only. Run triage first to prefill the recommended specialty. "}
-      Search #${state.doctorSearchCount}: showing ${doctors.length} integrated doctor${doctors.length === 1 ? "" : "s"} and ${googlePlaces.length} Google Maps result${googlePlaces.length === 1 ? "" : "s"} for ${escapeHtml(selectedSpecialty)} ${escapeHtml(searchScope)}.
+      Search #${state.doctorSearchCount}: showing ${doctors.length} integrated doctor${doctors.length === 1 ? "" : "s"}${useExternalDiscovery ? ` and ${googlePlaces.length} Google Maps result${googlePlaces.length === 1 ? "" : "s"}` : ""} for ${escapeHtml(selectedSpecialty)} ${escapeHtml(searchScope)}.
+      ${state.workspace === "receptionist" ? "Only doctors in this hospital network are shown for receptionist booking." : ""}
       ${googleResult.configured === false ? "Google Maps API is not configured on this server." : ""}
-      <a href="${externalSearchUrl}" target="_blank" rel="noreferrer">Open browser search</a>
+      ${useExternalDiscovery ? `<a href="${externalSearchUrl}" target="_blank" rel="noreferrer">Open browser search</a>` : ""}
     </div>
     ${
       doctors.length
@@ -1420,18 +1449,48 @@ function bookAppointment(doctorId, slot) {
   unlockStages(["treatment", "feedback"]);
   updateCarePath("appointments", ["intake", "triage", "followup", "routing"]);
   renderPatientTreatment();
-  setAgentStatus(`Appointment booked with ${appointment.doctorName} at ${appointment.slot}.`);
+  const message = `${appointment.doctorName} at ${appointment.hospitalName}, ${appointment.slot}.`;
+  setAgentStatus(`Appointment booked with ${message}`);
+  showBookingToast(message);
 }
 
 function renderDoctorQueue() {
   const data = careStore.read();
   const panel = $("#doctorQueue");
+  const dashboard = $("#doctorDashboard");
   const doctorHospital = state.currentUser?.hospital || "";
   const appointments = (data.appointments || []).filter((appointment) => {
     if (state.workspace !== "doctor") return true;
     if (appointment.doctorName === state.currentUser?.name) return true;
     return doctorHospital && appointment.hospitalName === doctorHospital;
   });
+  const sortedAppointments = [...appointments].sort((a, b) => String(a.slot || "").localeCompare(String(b.slot || "")) || String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  const todayCount = sortedAppointments.filter((appointment) => /^today/i.test(appointment.slot || "")).length;
+  const reviewedCount = sortedAppointments.filter((appointment) => caseHasDoctorReview(appointment.caseId, data)).length;
+  const pendingCount = Math.max(0, sortedAppointments.length - reviewedCount);
+
+  if (dashboard) {
+    dashboard.className = "doctor-dashboard";
+    dashboard.innerHTML = `
+      <article>
+        <span>Total appointments</span>
+        <strong>${sortedAppointments.length}</strong>
+      </article>
+      <article>
+        <span>Today</span>
+        <strong>${todayCount}</strong>
+      </article>
+      <article>
+        <span>Pending review</span>
+        <strong>${pendingCount}</strong>
+      </article>
+      <article>
+        <span>Reviewed</span>
+        <strong>${reviewedCount}</strong>
+      </article>
+    `;
+  }
+
   if (!appointments.length) {
     panel.className = "stack empty-state";
     panel.textContent = "Appointments will appear here after patients book a slot.";
@@ -1439,14 +1498,17 @@ function renderDoctorQueue() {
   }
 
   panel.className = "appointment-list";
-  panel.innerHTML = appointments
+  panel.innerHTML = sortedAppointments
     .map((appointment) => {
       const caseItem = data.cases.find((item) => item.id === appointment.caseId);
+      const reviewed = caseHasDoctorReview(appointment.caseId, data);
+      const patientName = patientNameForPersonId(appointment.personId || caseItem?.personId, data);
       return `
         <button class="case-card ${appointment.caseId === state.selectedDoctorCaseId ? "is-selected" : ""}" type="button" data-case-id="${escapeHtml(appointment.caseId)}">
-          <strong>${escapeHtml(appointment.doctorName)} · ${escapeHtml(appointment.slot)}</strong>
+          <strong>${escapeHtml(patientName)} · ${escapeHtml(appointment.slot)}</strong>
           <span>${escapeHtml(caseItem?.patientContext?.symptoms || "No symptoms recorded")}</span>
-          <span>${escapeHtml(appointment.hospitalName)} · ${escapeHtml(appointment.department)}</span>
+          <span>${escapeHtml(appointment.doctorName)} · ${escapeHtml(appointment.hospitalName)} · ${escapeHtml(appointment.department)}</span>
+          <span class="queue-status ${reviewed ? "reviewed" : "pending"}">${reviewed ? "Reviewed" : "Pending review"}</span>
         </button>
       `;
     })
@@ -1473,7 +1535,7 @@ function selectDoctorCase(caseId) {
   details.className = "stack";
   details.innerHTML = `
     <article class="case-card">
-      <strong>${escapeHtml(caseItem.route)}</strong>
+      <strong>${escapeHtml(patientNameForPersonId(caseItem.personId, data))} · ${escapeHtml(caseItem.route)}</strong>
       <p><strong>Symptoms:</strong> ${escapeHtml(caseItem.patientContext?.symptoms || "")}</p>
       <p><strong>Reports:</strong> ${escapeHtml(reportService.summarize(caseItem.reports || []))}</p>
       <p><strong>Follow-up answers:</strong> ${escapeHtml((caseItem.followupAnswers || []).map((item) => `${item.question}: ${item.answer}`).join(" | ") || "None")}</p>

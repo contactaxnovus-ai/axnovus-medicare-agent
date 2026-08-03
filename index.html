@@ -612,6 +612,7 @@
               </div>
             </div>
             <p class="helper-text">Select a booked patient, review intake details, add clinical notes, and request additional reports.</p>
+            <div id="doctorDashboard" class="doctor-dashboard empty-state">Appointment summary appears here.</div>
             <div class="doctor-workspace">
               <div>
                 <h3>Booked appointments</h3>
@@ -706,6 +707,8 @@
         </div>
       </section>
     </main>
+
+    <div id="bookingToast" class="booking-toast is-hidden" role="status" aria-live="polite"></div>
 
     <script src="config/healthcare.config.js"></script>
     <script src="config/clinical-seed.config.js"></script>

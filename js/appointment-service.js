@@ -144,6 +144,12 @@ window.createAppointmentService = function createAppointmentService(hospitalConf
     return hospital?.city || "";
   }
 
+  function cityCenter(cityName) {
+    const canonical = canonicalCity(cityName);
+    const cityKey = Object.keys(cityCenters).find((key) => normalize(key) === normalize(canonical));
+    return cityKey ? cityCenters[cityKey] : null;
+  }
+
   function buildExternalSearchUrl({ specialty, city, hospital }) {
     const template = hospitalConfig.externalSearchUrlTemplate || "https://www.google.com/search?q={specialty}+doctor+{city}+{hospital}";
     return template
@@ -162,5 +168,6 @@ window.createAppointmentService = function createAppointmentService(hospitalConf
     buildExternalSearchUrl,
     canonicalCity,
     cityForHospital,
+    cityCenter,
   };
 };

@@ -31,8 +31,11 @@ const state = {
   reports: [],
   provider: "rules",
   model: config.llm.defaultModel,
+  outputLanguage: { code: "en", label: "English", speechRecognitionLanguage: "en-IN", googleLanguageCode: "en" },
   followupQuestions: [],
   followupAnswers: [],
+  triagePhase: "idle",
+  lastRefinedAnswers: [],
   hasRun: false,
   lastContext: null,
   currentCaseId: null,
@@ -60,6 +63,45 @@ const state = {
 
 const $ = (selector) => document.querySelector(selector);
 
+const hindiRomanTokens = new Set([
+  "bukhar",
+  "khansi",
+  "saans",
+  "dard",
+  "sir",
+  "gala",
+  "ulti",
+  "chakkar",
+  "pet",
+  "pait",
+  "kamjori",
+  "badan",
+  "daane",
+  "jalna",
+  "sujan",
+  "kabz",
+  "dast",
+  "seene",
+  "chhati",
+  "peshab",
+]);
+
+function detectCareLanguage(text) {
+  const value = String(text || "");
+  const devanagariCount = (value.match(/[\u0900-\u097F]/g) || []).length;
+  const latinWords = value.toLowerCase().match(/[a-z]+/g) || [];
+  const romanHindiCount = latinWords.filter((word) => hindiRomanTokens.has(word)).length;
+  const englishClinicalCount = latinWords.filter((word) =>
+    ["fever", "cough", "pain", "headache", "cold", "vomit", "loose", "motion", "breathing", "rash", "chest"].includes(word)
+  ).length;
+  const hindiScore = devanagariCount * 2 + romanHindiCount;
+  const englishScore = englishClinicalCount + Math.max(0, latinWords.length - romanHindiCount) * 0.25;
+  const code = hindiScore > englishScore ? "hi" : "en";
+  return code === "hi"
+    ? { code: "hi", label: "Hindi", speechRecognitionLanguage: "hi-IN", googleLanguageCode: "hi" }
+    : { code: "en", label: "English", speechRecognitionLanguage: "en-IN", googleLanguageCode: "en" };
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -69,18 +111,40 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-function getPatientContext() {
+function getTriageConfigHints() {
+  return {
+    task: config.llm.task,
+    safetyInstruction: config.llm.safetyInstruction,
+    models: config.llm.models,
+    knownSignals: config.signals,
+    configuredConditions: (config.items || []).slice(0, 80).map((item) => ({
+      name: item.name,
+      specialty: item.specialty || item.route,
+      match: item.match || [],
+      questions: item.questions || [],
+      nextStep: item.nextStep || "",
+    })),
+    urgencyRules: config.urgencyRules || [],
+  };
+}
+
+function getPatientContext(refinementMode = "initial") {
+  const symptoms = $("#symptomInput").value.trim();
+  const outputLanguage = detectCareLanguage(`${symptoms} ${state.followupAnswers.map((item) => item.answer).join(" ")}`);
   return {
     personId: state.selectedPersonId,
     createdByRole: state.workspace,
-    symptoms: $("#symptomInput").value.trim(),
+    symptoms,
     followupAnswers: state.followupAnswers,
+    refinementMode,
     age: Number($("#ageInput").value || 0),
     sex: $("#sexInput").value,
     location: $("#locationInput").value.trim(),
     languageHints: config.languageHints,
+    outputLanguage,
     model: $("#modelSelect").value || config.llm.defaultModel,
     reports: getSelectedReportsForCase(),
+    configHints: getTriageConfigHints(),
   };
 }
 
@@ -639,8 +703,23 @@ function showPatientStage(stage) {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
+function showCareStage(stage) {
+  if (state.workspace === "receptionist") {
+    if (!state.unlockedStages.includes(stage)) {
+      setAgentStatus("Complete the current step before moving ahead.", "warning");
+      return;
+    }
+    showReceptionPanel(stage);
+    return;
+  }
+  showPatientStage(stage);
+}
+
 function showReceptionPanel(panelName) {
   state.activeReceptionPanel = panelName;
+  if (["intake", "reports", "triage", "followup", "routing", "appointments"].includes(panelName)) {
+    state.activePatientStage = panelName;
+  }
   const sharedPanels = new Set(["intake", "reports", "triage", "followup", "routing", "appointments"]);
   document.querySelectorAll(".receptionist-panel-view").forEach((panel) => {
     panel.classList.toggle("is-hidden", panel.dataset.panel !== panelName);
@@ -895,6 +974,8 @@ function renderChips() {
 
 function renderConditions() {
   const list = $("#conditionList");
+  const refinePanel = $("#refineDecisionPanel");
+  if (refinePanel) refinePanel.classList.add("is-hidden");
   if (!state.results.length) {
     list.className = "stack empty-state";
     list.textContent = state.hasRun
@@ -916,6 +997,17 @@ function renderConditions() {
       `
     )
     .join("");
+
+  if (state.triagePhase === "refined" && state.lastRefinedAnswers.length) {
+    list.insertAdjacentHTML(
+      "beforeend",
+      `<div class="agent-status">Refined using ${state.lastRefinedAnswers.length} follow-up answer${state.lastRefinedAnswers.length === 1 ? "" : "s"}.</div>`
+    );
+  }
+
+  if (refinePanel && state.triagePhase === "initial" && state.followupQuestions.length) {
+    refinePanel.classList.remove("is-hidden");
+  }
 }
 
 function renderQuestions() {
@@ -928,8 +1020,11 @@ function renderQuestions() {
     return;
   }
 
-  if (!arraysMatch(state.followupQuestions, questions)) {
-    state.followupAnswers = [];
+  const priorAnswers = new Map(state.followupAnswers.map((item) => [item.question, item.answer]));
+  if (!arraysMatch(state.followupQuestions, questions) && state.triagePhase !== "refined") {
+    state.followupAnswers = questions
+      .map((question) => ({ question, answer: priorAnswers.get(question) || "" }))
+      .filter((item) => item.answer);
   }
   state.followupQuestions = questions;
   panel.className = "questions";
@@ -1145,7 +1240,77 @@ function saveCurrentCase() {
   return record;
 }
 
-function renderAppointmentOptions() {
+function getGoogleDoctorOrigin(filters) {
+  if (filters.city) return appointmentService.cityCenter(filters.city);
+  const hospital = appointmentService.hospitalByName(filters.hospital);
+  return hospital ? { latitude: hospital.latitude, longitude: hospital.longitude } : null;
+}
+
+async function fetchGoogleDoctorResults(selectedSpecialty, filters) {
+  try {
+    const response = await fetch("/api/google-doctors", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        specialty: selectedSpecialty,
+        city: filters.city || appointmentService.cityForHospital(filters.hospital),
+        hospital: filters.hospital,
+        radiusKm: filters.radiusKm,
+        origin: getGoogleDoctorOrigin(filters),
+        languageCode: state.outputLanguage.googleLanguageCode,
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `Google doctor search returned ${response.status}`);
+    return data;
+  } catch (error) {
+    console.warn("Google doctor search failed:", error);
+    return { configured: false, places: [], error: error.message };
+  }
+}
+
+function renderIntegratedDoctorCard(doctor) {
+  return `
+    <article class="appointment-card">
+      <strong>${escapeHtml(doctor.name)}</strong>
+      <p>${escapeHtml(doctor.department)} · ${escapeHtml(doctor.hospitalName)}, ${escapeHtml(doctor.area ? `${doctor.area}, ` : "")}${escapeHtml(doctor.city)} · ${escapeHtml(doctor.experience)}</p>
+      <div class="doctor-meta">
+        <span>${Number(doctor.rating || 0).toFixed(1)} rating</span>
+        <span>${escapeHtml((doctor.languages || []).join(", ") || "Language not listed")}</span>
+        <span>${doctor.consultationFee ? `Rs. ${doctor.consultationFee}` : "Fee not listed"}</span>
+        ${doctor.distanceKm !== null && doctor.distanceKm !== undefined ? `<span>${doctor.distanceKm.toFixed(1)} km approx.</span>` : ""}
+      </div>
+      <div class="slot-grid">
+        ${doctor.slots
+          .map(
+            (slot) =>
+              `<button class="slot-button" type="button" data-doctor-id="${escapeHtml(doctor.id)}" data-slot="${escapeHtml(slot)}">${escapeHtml(slot)}</button>`
+          )
+          .join("")}
+      </div>
+    </article>
+  `;
+}
+
+function renderGoogleDoctorCard(place) {
+  return `
+    <article class="appointment-card external-doctor-card">
+      <strong>${escapeHtml(place.name)}</strong>
+      <p>${escapeHtml(place.address || "Address not available")}</p>
+      <div class="doctor-meta">
+        <span>Google Maps result</span>
+        ${place.rating ? `<span>${Number(place.rating).toFixed(1)} rating</span>` : ""}
+        ${place.phone ? `<span>${escapeHtml(place.phone)}</span>` : ""}
+      </div>
+      <div class="inline-actions">
+        ${place.googleMapsUri ? `<a class="secondary-action" href="${escapeHtml(place.googleMapsUri)}" target="_blank" rel="noreferrer">Open Maps</a>` : ""}
+        ${place.websiteUri ? `<a class="secondary-action" href="${escapeHtml(place.websiteUri)}" target="_blank" rel="noreferrer">Website</a>` : ""}
+      </div>
+    </article>
+  `;
+}
+
+async function renderAppointmentOptions() {
   const panel = $("#appointmentList");
   if (!panel) return;
 
@@ -1153,6 +1318,8 @@ function renderAppointmentOptions() {
   const selectedSpecialty = filters.specialty || getTopRoute();
   const doctors = appointmentService.findDoctors(selectedSpecialty, filters);
   state.lastDoctorResults = doctors;
+  const googleResult = await fetchGoogleDoctorResults(selectedSpecialty, filters);
+  const googlePlaces = googleResult.places || [];
   const externalSearchUrl = appointmentService.buildExternalSearchUrl({
     specialty: selectedSpecialty,
     city: filters.city || appointmentService.cityForHospital(filters.hospital) || "",
@@ -1170,8 +1337,9 @@ function renderAppointmentOptions() {
   panel.innerHTML = `
     <div class="agent-status">
       ${state.hasRun ? "" : "Directory search only. Run triage first to prefill the recommended specialty. "}
-      Search #${state.doctorSearchCount}: showing ${doctors.length} integrated doctor${doctors.length === 1 ? "" : "s"} for ${escapeHtml(selectedSpecialty)} ${escapeHtml(searchScope)}.
-      <a href="${externalSearchUrl}" target="_blank" rel="noreferrer">Open external directory search</a>
+      Search #${state.doctorSearchCount}: showing ${doctors.length} integrated doctor${doctors.length === 1 ? "" : "s"} and ${googlePlaces.length} Google Maps result${googlePlaces.length === 1 ? "" : "s"} for ${escapeHtml(selectedSpecialty)} ${escapeHtml(searchScope)}.
+      ${googleResult.configured === false ? "Google Maps API is not configured on this server." : ""}
+      <a href="${externalSearchUrl}" target="_blank" rel="noreferrer">Open browser search</a>
     </div>
     ${
       doctors.length
@@ -1202,6 +1370,27 @@ function renderAppointmentOptions() {
         : `<div class="empty-state">No matching doctors found in the local directory. Try a wider radius, another city, or open the external directory search.</div>`
     }
   `;
+
+  panel.innerHTML = `
+    <div class="agent-status">
+      ${state.hasRun ? "" : "Directory search only. Run triage first to prefill the recommended specialty. "}
+      Search #${state.doctorSearchCount}: showing ${doctors.length} integrated doctor${doctors.length === 1 ? "" : "s"} and ${googlePlaces.length} Google Maps result${googlePlaces.length === 1 ? "" : "s"} for ${escapeHtml(selectedSpecialty)} ${escapeHtml(searchScope)}.
+      ${googleResult.configured === false ? "Google Maps API is not configured on this server." : ""}
+      <a href="${externalSearchUrl}" target="_blank" rel="noreferrer">Open browser search</a>
+    </div>
+    ${
+      doctors.length
+        ? doctors.map(renderIntegratedDoctorCard).join("")
+        : `<div class="empty-state">No matching integrated doctors found. Try a wider radius, another city, or use a Google Maps result below.</div>`
+    }
+  `;
+
+  if (googlePlaces.length) {
+    panel.insertAdjacentHTML(
+      "beforeend",
+      `<div class="section-divider">Google Maps results</div>${googlePlaces.map(renderGoogleDoctorCard).join("")}`
+    );
+  }
 
   document.querySelectorAll(".slot-button").forEach((button) => {
     button.addEventListener("click", () => bookAppointment(button.dataset.doctorId, button.dataset.slot));
@@ -1572,6 +1761,8 @@ async function analyze({ refine = false } = {}) {
 
   if (refine) collectFollowupAnswers();
   if (!refine) state.followupAnswers = [];
+  if (refine) state.lastRefinedAnswers = [...state.followupAnswers];
+  if (!refine) state.lastRefinedAnswers = [];
 
   button.disabled = true;
   $("#refineButton").disabled = true;
@@ -1579,39 +1770,50 @@ async function analyze({ refine = false } = {}) {
   updateCarePath("triage", ["intake"]);
   setAgentStatus(refine ? "Refining triage with follow-up answers..." : "Analyzing symptoms and checking red flags...");
 
-  const result = await engine.run(getPatientContext(), { mode: $("#triageMode").value });
+  const context = getPatientContext(refine ? "refine_with_followup_answers" : "initial_from_intake");
+  const result = await engine.run(context, { mode: $("#triageMode").value });
   state.hasRun = true;
-  state.lastContext = getPatientContext();
+  state.lastContext = context;
   state.extracted = result.extractedSymptoms;
   state.results = result.possibleConditions;
   state.urgent = result.urgent;
   state.provider = result.provider;
   state.model = $("#modelSelect").value || config.llm.defaultModel;
+  state.outputLanguage = result.outputLanguage || context.outputLanguage || state.outputLanguage;
+  state.triagePhase = refine ? "refined" : "initial";
 
   renderRiskBadge();
-  renderConditions();
   renderQuestions();
+  renderConditions();
   renderDoctorRouting();
   setDoctorFilters({ specialty: getTopRoute(), city: appointmentService.canonicalCity(extractCity(state.lastContext.location)) });
   saveCurrentCase();
   renderAppointmentOptions();
-  unlockStages(["triage", "followup", "routing", "appointments"]);
+  unlockStages(refine ? ["triage", "followup", "routing", "appointments"] : ["triage"]);
+  showCareStage("triage");
 
   if (state.urgent.length) {
-    unlockStages(["appointments"]);
+    unlockStages(["routing", "appointments"]);
     updateCarePath("routing", ["intake", "triage"]);
   } else if (refine && state.results.length) {
-    unlockStages(["appointments"]);
-    updateCarePath("routing", ["intake", "triage", "followup"]);
+    unlockStages(["routing", "appointments"]);
+    showCareStage("triage");
+    updateCarePath("triage", ["intake", "followup"]);
   } else if (state.results.length) {
-    if (!state.followupQuestions.length) unlockStages(["appointments"]);
-    updateCarePath(state.followupQuestions.length ? "followup" : "appointments", ["intake", "triage"]);
+    if (!state.followupQuestions.length) unlockStages(["routing", "appointments"]);
+    updateCarePath("triage", ["intake"]);
   } else {
     updateCarePath("triage", ["intake"]);
   }
 
   if (state.results.length) {
-    if (!state.urgent.length) setAgentStatus("Case review completed. Check possible conditions, follow-up questions, and routing.");
+    if (!state.urgent.length) {
+      setAgentStatus(
+        refine
+          ? "Refined review completed. Check updated conditions and continue to doctor search."
+          : "Initial review completed. Check possible conditions and choose whether to answer follow-up questions."
+      );
+    }
   } else if (!state.urgent.length) {
     setAgentStatus("No strong match yet. Add more symptom detail and run the review again.", "warning");
   }
@@ -1620,6 +1822,22 @@ async function analyze({ refine = false } = {}) {
   button.textContent = "Run care triage";
   $("#refineButton").disabled = !state.followupQuestions.length;
   setFeedbackEnabled(Boolean(state.results.length || state.urgent.length));
+}
+
+function startRefinement() {
+  if (!state.followupQuestions.length) {
+    setAgentStatus("No follow-up questions were generated for this case.", "warning");
+    return;
+  }
+  unlockStages(["followup"]);
+  showCareStage("followup");
+  setAgentStatus("Answer the follow-up questions, then run refinement.");
+}
+
+function skipRefinement() {
+  unlockStages(["routing", "appointments"]);
+  showCareStage("routing");
+  setAgentStatus("Follow-up refinement skipped. Continue with specialist routing and doctor search.");
 }
 
 function clearSearch() {
@@ -1636,6 +1854,8 @@ function clearSearch() {
   state.model = config.llm.defaultModel;
   state.followupQuestions = [];
   state.followupAnswers = [];
+  state.triagePhase = "idle";
+  state.lastRefinedAnswers = [];
   state.hasRun = false;
   state.lastContext = null;
   state.currentCaseId = null;
@@ -1730,7 +1950,6 @@ function setupVoice() {
   }
 
   const recognition = new SpeechRecognition();
-  recognition.lang = "hi-IN";
   recognition.interimResults = false;
   recognition.continuous = false;
 
@@ -1750,10 +1969,15 @@ function setupVoice() {
       .join(" ");
     const input = $("#symptomInput");
     input.value = `${input.value}${input.value ? " " : ""}${transcript}`;
-    setAgentStatus("Voice symptoms captured. Click Run care triage when ready.");
+    state.outputLanguage = detectCareLanguage(input.value);
+    setAgentStatus(`Voice symptoms captured. Output language set to ${state.outputLanguage.label}. Click Run care triage when ready.`);
   };
 
-  button.addEventListener("click", () => recognition.start());
+  button.addEventListener("click", () => {
+    const requested = $("#voiceLanguageSelect")?.value || "auto";
+    recognition.lang = requested === "auto" ? detectCareLanguage($("#symptomInput")?.value || "").speechRecognitionLanguage : requested;
+    recognition.start();
+  });
 }
 
 function setupNavigation() {
@@ -1771,16 +1995,18 @@ function setupNavigation() {
 
   document.querySelectorAll(".receptionist-care-path .path-step").forEach((button) => {
     button.addEventListener("click", () => {
-      showReceptionPanel(button.dataset.view);
+      const sharedStages = ["intake", "reports", "triage", "followup", "routing", "appointments"];
+      if (sharedStages.includes(button.dataset.view)) showCareStage(button.dataset.view);
+      else showReceptionPanel(button.dataset.view);
     });
   });
 
   document.querySelectorAll("[data-prev-stage]").forEach((button) => {
-    button.addEventListener("click", () => showPatientStage(button.dataset.prevStage));
+    button.addEventListener("click", () => showCareStage(button.dataset.prevStage));
   });
 
   document.querySelectorAll("[data-next-stage]").forEach((button) => {
-    button.addEventListener("click", () => showPatientStage(button.dataset.nextStage));
+    button.addEventListener("click", () => showCareStage(button.dataset.nextStage));
   });
 
   document.querySelectorAll("[data-doctor-prev]").forEach((button) => {
@@ -1842,8 +2068,10 @@ function bootApp() {
     setupNavigation();
     bind("#analyzeButton", "click", analyze);
     bind("#refineButton", "click", () => analyze({ refine: true }));
+    bind("#startRefinementButton", "click", startRefinement);
+    bind("#skipRefinementButton", "click", skipRefinement);
     bind("#clearButton", "click", clearSearch);
-    bind("#searchDoctorsButton", "click", () => {
+    bind("#searchDoctorsButton", "click", async () => {
       setDoctorFilters(getDoctorFilters());
       state.doctorSearchCount += 1;
       const panel = $("#appointmentList");
@@ -1851,7 +2079,7 @@ function bootApp() {
         panel.className = "stack empty-state";
         panel.textContent = "Refreshing doctor results...";
       }
-      renderAppointmentOptions();
+      await renderAppointmentOptions();
       const filters = getDoctorFilters();
       setAgentStatus(
         filters.searchMode === "hospital"

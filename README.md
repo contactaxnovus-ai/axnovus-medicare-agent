@@ -70,11 +70,22 @@ Open:
 http://localhost:4174/index.html
 ```
 
-Run with an OpenAI key:
+Run with OpenAI and Google Maps keys:
 
 ```powershell
 $env:OPENAI_API_KEY="your_api_key"
-docker run --name axnovus-care-agent --rm -p 4174:4173 -e OPENAI_API_KEY=$env:OPENAI_API_KEY axnovus-care-agent
+$env:GOOGLE_MAPS_API_KEY="your_google_maps_api_key"
+docker run --name axnovus-care-agent --rm -p 4174:4173 `
+  -e OPENAI_API_KEY=$env:OPENAI_API_KEY `
+  -e GOOGLE_MAPS_API_KEY=$env:GOOGLE_MAPS_API_KEY `
+  axnovus-care-agent
+```
+
+Optional LLM model controls:
+
+```powershell
+$env:OPENAI_MODEL="gpt-4.1"
+$env:OPENAI_ALLOWED_MODELS="gpt-4.1,gpt-4.1-mini,gpt-4o-mini"
 ```
 
 Run with Gmail API email delivery for signup verification and forgot-password reset:
@@ -182,9 +193,9 @@ The UI is split into two workspaces:
 
 Patient steps unlock in sequence so users are guided through the flow instead of seeing every panel at once.
 
-The booking step includes specialist doctor search by specialty, city, hospital name, and nearby radius. Hospital search and nearby-radius search are treated as separate modes: if a hospital is selected, the app searches that hospital; if no hospital is selected, the app uses city/radius. The current implementation uses the configurable local hospital directory and exposes an external directory-search link. For production, replace the local provider with a hospital appointment API, a verified doctor-directory API, Google Maps Places/Distance Matrix APIs for facility discovery and distance calculation, or a compliant scraping-backed backend service after legal review. Do not scrape hospital/doctor websites directly from browser JavaScript because it is brittle, often blocked by CORS, and may violate site terms.
+The booking step includes specialist doctor search by specialty, city, hospital name, and nearby radius. Hospital search and nearby-radius search are treated as separate modes: if a hospital is selected, the app searches that hospital; if no hospital is selected, the app uses city/radius. The app now combines the configurable integrated-doctor directory with server-side Google Maps Places search when `GOOGLE_MAPS_API_KEY` is set. Integrated doctors are bookable inside the app; Google Maps results provide discovery, phone, website, and map links until that hospital is integrated with appointment slots.
 
-The app does not analyze while you type or after voice capture. After the first result, answer the follow-up question boxes and click `Refine with answers` to narrow the triage. Use `New case` to reset the current case and start a new search.
+The app does not analyze while you type or after voice capture. After the first result, it shows possible conditions and asks whether the patient wants to answer follow-up questions. If the patient chooses refinement, answer the follow-up question boxes and click `Refine with answers` to re-run OpenAI triage using symptoms, selected reports, and follow-up answers. Use `New case` to reset the current case and start a new search.
 
 The left side is a care path, not a settings menu:
 

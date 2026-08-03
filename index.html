@@ -450,6 +450,14 @@
                 Assessment profile
                 <select id="modelSelect"></select>
               </label>
+              <label>
+                Voice language
+                <select id="voiceLanguageSelect">
+                  <option value="auto">Auto</option>
+                  <option value="en-IN">English</option>
+                  <option value="hi-IN">Hindi</option>
+                </select>
+              </label>
             </div>
 
             <div class="action-row">
@@ -472,6 +480,16 @@
             </div>
             <p class="helper-text">This step opens after triage is run.</p>
             <div id="conditionList" class="stack empty-state">Step 1 is waiting for symptoms and patient details.</div>
+            <div id="refineDecisionPanel" class="refine-decision is-hidden">
+              <div>
+                <strong>Would you like to answer follow-up questions to refine these possible conditions?</strong>
+                <p>Use this when symptoms need narrowing before doctor search.</p>
+              </div>
+              <div class="inline-actions">
+                <button class="primary-action" id="startRefinementButton" type="button">Answer questions</button>
+                <button class="secondary-action" id="skipRefinementButton" type="button">Continue without refinement</button>
+              </div>
+            </div>
             <div class="step-actions">
               <button class="secondary-action" type="button" data-prev-stage="intake">Back</button>
               <button class="secondary-action" type="button" data-next-stage="followup">Next</button>

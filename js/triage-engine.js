@@ -41,6 +41,7 @@ window.createTriageEngine = function createTriageEngine(config, hooks = {}) {
       extractedSymptoms: extracted,
       possibleConditions: scoreItems(extracted),
       urgent: detectUrgency(extracted),
+      outputLanguage: context.outputLanguage || null,
     };
   }
 
@@ -67,6 +68,7 @@ window.createTriageEngine = function createTriageEngine(config, hooks = {}) {
             },
           ],
           urgent: [{ key: "string", text: "string" }],
+          outputLanguage: { code: "en or hi", label: "string" },
         },
       }),
     });
@@ -78,6 +80,7 @@ window.createTriageEngine = function createTriageEngine(config, hooks = {}) {
       extractedSymptoms: Array.isArray(data.extractedSymptoms) ? data.extractedSymptoms : [],
       possibleConditions: Array.isArray(data.possibleConditions) ? data.possibleConditions : [],
       urgent: Array.isArray(data.urgent) ? data.urgent : [],
+      outputLanguage: data.outputLanguage || context.outputLanguage || null,
     };
   }
 
@@ -93,6 +96,7 @@ window.createTriageEngine = function createTriageEngine(config, hooks = {}) {
         extractedSymptoms: Array.from(new Set([...local.extractedSymptoms, ...llm.extractedSymptoms])),
         possibleConditions: normalizeConditions(llm.possibleConditions, local.possibleConditions, true),
         urgent: mergeUrgency(local.urgent, llm.urgent),
+        outputLanguage: llm.outputLanguage || context.outputLanguage || null,
       };
     } catch (error) {
       console.warn("LLM triage failed, using local fallback:", error);

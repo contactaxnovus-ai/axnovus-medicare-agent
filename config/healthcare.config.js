@@ -9,8 +9,9 @@ window.TRIAGE_APP_CONFIG = {
   llm: {
     endpoint: "/api/triage",
     primary: true,
-    defaultModel: "gpt-4.1",
+    defaultModel: "gpt-5.2",
     models: [
+      { id: "gpt-5.2", label: "Advanced clinical reasoning" },
       { id: "gpt-4.1", label: "Comprehensive review" },
       { id: "gpt-4.1-mini", label: "Balanced review" },
       { id: "gpt-4o-mini", label: "Fast review" },

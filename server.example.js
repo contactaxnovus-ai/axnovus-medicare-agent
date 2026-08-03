@@ -6,12 +6,22 @@ const tls = require("node:tls");
 const rootDir = __dirname;
 const port = Number(process.env.PORT || 4173);
 const defaultModel = process.env.OPENAI_MODEL || "gpt-4.1";
-const allowedModels = new Set(["gpt-4.1", "gpt-4.1-mini", "gpt-4o-mini"]);
+const allowedModels = new Set((process.env.OPENAI_ALLOWED_MODELS || "gpt-4.1,gpt-4.1-mini,gpt-4o-mini").split(",").map((item) => item.trim()).filter(Boolean));
+const googlePlacesFieldMask = [
+  "places.id",
+  "places.displayName",
+  "places.formattedAddress",
+  "places.location",
+  "places.rating",
+  "places.googleMapsUri",
+  "places.websiteUri",
+  "places.nationalPhoneNumber",
+].join(",");
 
 const triageSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["extractedSymptoms", "possibleConditions", "urgent"],
+  required: ["extractedSymptoms", "possibleConditions", "urgent", "outputLanguage"],
   properties: {
     extractedSymptoms: {
       type: "array",
@@ -54,6 +64,15 @@ const triageSchema = {
         },
       },
     },
+    outputLanguage: {
+      type: "object",
+      additionalProperties: false,
+      required: ["code", "label"],
+      properties: {
+        code: { type: "string", enum: ["en", "hi"] },
+        label: { type: "string" },
+      },
+    },
   },
 };
 
@@ -76,7 +95,7 @@ function readJson(req) {
     let body = "";
     req.on("data", (chunk) => {
       body += chunk;
-      if (body.length > 20000) reject(new Error("Request body too large"));
+      if (body.length > 250000) reject(new Error("Request body too large"));
     });
     req.on("end", () => resolve(JSON.parse(body || "{}")));
     req.on("error", reject);
@@ -260,6 +279,75 @@ async function handlePasswordReset(req, res) {
   });
 }
 
+function sanitizeMapsResult(place, specialty) {
+  return {
+    id: place.id || "",
+    name: place.displayName?.text || "Doctor or hospital",
+    specialty,
+    address: place.formattedAddress || "",
+    latitude: place.location?.latitude || null,
+    longitude: place.location?.longitude || null,
+    rating: place.rating || null,
+    googleMapsUri: place.googleMapsUri || "",
+    websiteUri: place.websiteUri || "",
+    phone: place.nationalPhoneNumber || "",
+  };
+}
+
+async function handleGoogleDoctorSearch(req, res) {
+  if (!process.env.GOOGLE_MAPS_API_KEY) {
+    sendJson(res, 200, { configured: false, places: [], message: "Set GOOGLE_MAPS_API_KEY to enable Google Maps doctor search." });
+    return;
+  }
+
+  const payload = await readJson(req);
+  const specialty = normalizeMailData(payload.specialty || "specialist");
+  const city = normalizeMailData(payload.city || "");
+  const hospital = normalizeMailData(payload.hospital || "");
+  const radiusKm = Math.max(0, Math.min(50, Number(payload.radiusKm || 0)));
+  const origin = payload.origin || null;
+  const languageCode = ["hi", "en"].includes(payload.languageCode) ? payload.languageCode : "en";
+  const textQuery = hospital
+    ? `${specialty} doctor at ${hospital} ${city} India`
+    : `${specialty} doctor ${city || "India"}`;
+  const requestBody = {
+    textQuery,
+    regionCode: "IN",
+    languageCode,
+    maxResultCount: 8,
+  };
+
+  if (radiusKm > 0 && origin && typeof origin.latitude === "number" && typeof origin.longitude === "number") {
+    requestBody.locationBias = {
+      circle: {
+        center: { latitude: origin.latitude, longitude: origin.longitude },
+        radius: radiusKm * 1000,
+      },
+    };
+  }
+
+  const response = await fetch("https://places.googleapis.com/v1/places:searchText", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Goog-Api-Key": process.env.GOOGLE_MAPS_API_KEY,
+      "X-Goog-FieldMask": googlePlacesFieldMask,
+    },
+    body: JSON.stringify(requestBody),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    sendJson(res, response.status, { configured: true, places: [], error: data.error?.message || "Google Maps doctor search failed." });
+    return;
+  }
+
+  sendJson(res, 200, {
+    configured: true,
+    query: textQuery,
+    places: (data.places || []).map((place) => sanitizeMapsResult(place, specialty)),
+  });
+}
+
 async function handleTriage(req, res) {
   if (!process.env.OPENAI_API_KEY) {
     sendJson(res, 500, { error: "Set OPENAI_API_KEY before using /api/triage." });
@@ -284,6 +372,11 @@ async function handleTriage(req, res) {
         "You do not diagnose, prescribe, or replace a clinician.",
         "Understand English, Hindi, Hinglish, and transliterated Hindi symptom descriptions.",
         "First identify emergency red flags, then return possible conditions, follow-up questions, and specialist routing.",
+        "Use configuredConditions, knownSignals, and urgencyRules as product hints, not as a fixed rule engine.",
+        "Generate follow-up questions yourself from symptoms, likely conditions, selected reports, demographics, and the configured hints.",
+        "Return all user-facing text in the requested outputLanguage. Preserve proper nouns such as doctor, hospital, medicine, and city names unless a localized official name is obvious.",
+        "For initial_from_intake, return likely possible conditions and ask whether targeted follow-up could improve certainty.",
+        "For refine_with_followup_answers, use the provided answers to update condition scores and ask only new questions if clinically useful.",
         "Follow-up questions must be specific to the patient's described symptoms, duration, demographics, uploaded report data, and possible conditions.",
         "Do not reuse a generic fever question set when symptoms, reports, or duration point to a different or more specific condition.",
         "Keep recommendations conservative and require clinician review.",
@@ -302,6 +395,9 @@ async function handleTriage(req, res) {
                 sex: context.sex || "",
                 location: context.location || "",
                 languageHints: context.languageHints || ["en-IN", "hi-IN"],
+                outputLanguage: context.outputLanguage || { code: "en", label: "English" },
+                refinementMode: context.refinementMode || "initial",
+                configHints: context.configHints || {},
               }),
             },
           ],
@@ -368,6 +464,10 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "POST" && req.url === "/api/triage") {
       await handleTriage(req, res);
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/google-doctors") {
+      await handleGoogleDoctorSearch(req, res);
       return;
     }
     serveStatic(req, res);

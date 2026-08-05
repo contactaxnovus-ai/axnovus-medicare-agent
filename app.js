@@ -116,6 +116,8 @@ function getTriageConfigHints() {
   return {
     task: config.llm.task,
     safetyInstruction: config.llm.safetyInstruction,
+    reportUsePolicy: "Use selected uploaded report text as clinical evidence alongside symptoms; treat config values as hints only.",
+    refinementPolicy: "Generate and refine possible conditions through the LLM using symptoms, selected reports, demographics, and follow-up answers.",
     models: config.llm.models,
     knownSignals: config.signals,
     configuredConditions: (config.items || []).slice(0, 80).map((item) => ({
@@ -129,9 +131,21 @@ function getTriageConfigHints() {
   };
 }
 
+function getReportEvidenceForCase() {
+  return getSelectedReportsForCase().map((report) => ({
+    id: report.id,
+    name: report.name,
+    reportType: report.reportType || "Report",
+    status: report.status || "",
+    summary: reportService.summarize([report]),
+    text: String(report.text || "").slice(0, 8000),
+  }));
+}
+
 function getPatientContext(refinementMode = "initial") {
   const symptoms = $("#symptomInput").value.trim();
   const outputLanguage = detectCareLanguage(`${symptoms} ${state.followupAnswers.map((item) => item.answer).join(" ")}`);
+  const reportEvidence = getReportEvidenceForCase();
   return {
     personId: state.selectedPersonId,
     patientContact: patientPhoneForPersonId(state.selectedPersonId),
@@ -146,6 +160,9 @@ function getPatientContext(refinementMode = "initial") {
     outputLanguage,
     model: $("#modelSelect").value || config.llm.defaultModel,
     reports: getSelectedReportsForCase(),
+    reportEvidence,
+    selectedReportCount: reportEvidence.length,
+    availableReportCount: getWalletReportsForSelectedPerson().length,
     configHints: getTriageConfigHints(),
   };
 }
@@ -1399,10 +1416,6 @@ function renderGoogleDoctorCard(place) {
         ${place.rating ? `<span>${Number(place.rating).toFixed(1)} rating</span>` : ""}
         ${place.phone ? `<span>${escapeHtml(place.phone)}</span>` : ""}
       </div>
-      <div class="inline-actions">
-        ${place.googleMapsUri ? `<a class="secondary-action" href="${escapeHtml(place.googleMapsUri)}" target="_blank" rel="noreferrer">Open Maps</a>` : ""}
-        ${place.websiteUri ? `<a class="secondary-action" href="${escapeHtml(place.websiteUri)}" target="_blank" rel="noreferrer">Website</a>` : ""}
-      </div>
     </article>
   `;
 }
@@ -1418,11 +1431,6 @@ async function renderAppointmentOptions() {
   const useExternalDiscovery = state.workspace !== "receptionist";
   const googleResult = useExternalDiscovery ? await fetchGoogleDoctorResults(selectedSpecialty, filters) : { configured: true, places: [] };
   const googlePlaces = googleResult.places || [];
-  const externalSearchUrl = appointmentService.buildExternalSearchUrl({
-    specialty: selectedSpecialty,
-    city: filters.city || appointmentService.cityForHospital(filters.hospital) || "",
-    hospital: filters.hospital,
-  });
   const searchScope =
     filters.searchMode === "hospital"
       ? `at ${filters.hospital}`
@@ -1435,10 +1443,9 @@ async function renderAppointmentOptions() {
   panel.innerHTML = `
     <div class="agent-status">
       ${state.hasRun ? "" : "Run triage first to prefill the recommended specialty. "}
-      Select an integrated doctor slot${useExternalDiscovery ? " or review external results separately" : ""}.
+      Available doctor options for ${escapeHtml(selectedSpecialty)} ${escapeHtml(searchScope)}.
       ${state.workspace === "receptionist" ? "Only doctors in this hospital network are shown for receptionist booking." : ""}
       ${googleResult.configured === false ? "Google Maps API is not configured on this server." : ""}
-      ${useExternalDiscovery ? `<a href="${externalSearchUrl}" target="_blank" rel="noreferrer">Open browser search</a>` : ""}
     </div>
     ${
       doctors.length
@@ -1473,10 +1480,9 @@ async function renderAppointmentOptions() {
   panel.innerHTML = `
     <div class="agent-status">
       ${state.hasRun ? "" : "Run triage first to prefill the recommended specialty. "}
-      Select an integrated doctor slot${useExternalDiscovery ? " or review external results separately" : ""}.
+      Available doctor options for ${escapeHtml(selectedSpecialty)} ${escapeHtml(searchScope)}.
       ${state.workspace === "receptionist" ? "Only doctors in this hospital network are shown for receptionist booking." : ""}
       ${googleResult.configured === false ? "Google Maps API is not configured on this server." : ""}
-      ${useExternalDiscovery ? `<a href="${externalSearchUrl}" target="_blank" rel="noreferrer">Open browser search</a>` : ""}
     </div>
     ${
       doctors.length
@@ -1965,6 +1971,10 @@ async function analyze({ refine = false } = {}) {
     setAgentStatus("Please type symptoms first, for example: fever for 3 days, cough, body pain.", "warning");
     return;
   }
+  const walletReportCount = getWalletReportsForSelectedPerson().length;
+  if (walletReportCount && !state.selectedReportIds.length) {
+    setAgentStatus("Reports exist for this patient but none are selected. Select reports in Intake if they should be used for LLM triage.", "warning");
+  }
 
   if (refine) collectFollowupAnswers();
   if (!refine) state.followupAnswers = [];
@@ -1975,7 +1985,12 @@ async function analyze({ refine = false } = {}) {
   $("#refineButton").disabled = true;
   button.textContent = "Analyzing...";
   updateCarePath("triage", ["intake"]);
-  setAgentStatus(refine ? "Refining triage with follow-up answers..." : "Analyzing symptoms and checking red flags...");
+  const selectedReportCount = state.selectedReportIds.length;
+  setAgentStatus(
+    refine
+      ? `Refining triage with follow-up answers${selectedReportCount ? ` and ${selectedReportCount} selected report${selectedReportCount === 1 ? "" : "s"}` : ""}...`
+      : `Analyzing symptoms${selectedReportCount ? ` with ${selectedReportCount} selected report${selectedReportCount === 1 ? "" : "s"}` : ""} and checking red flags...`
+  );
 
   const context = getPatientContext(refine ? "refine_with_followup_answers" : "initial_from_intake");
   const result = await engine.run(context, { mode: $("#triageMode").value });

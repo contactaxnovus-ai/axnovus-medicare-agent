@@ -293,13 +293,20 @@
                 </div>
                 <div class="form-row two-column">
                   <label>
+                    Contact
+                    <input id="memberPhoneInput" type="tel" placeholder="Mobile number" />
+                  </label>
+                  <label>
                     Relation
                     <input id="memberRelationInput" type="text" placeholder="Self, father, child..." />
                   </label>
+                </div>
+                <div class="form-row two-column">
                   <label>
                     City / State
                     <input id="memberLocationInput" type="text" placeholder="City, State" />
                   </label>
+                  <span></span>
                 </div>
                 <button class="primary-action" id="saveMemberButton" type="button">Save patient</button>
               </div>
@@ -397,9 +404,6 @@
                 <p class="eyebrow">Step 1</p>
                 <h2>Patient intake</h2>
               </div>
-              <button class="icon-button" id="voiceButton" type="button" aria-label="Start Hindi voice input" title="Hindi voice input">
-                <span id="micIcon">Mic</span>
-              </button>
             </div>
             <p class="helper-text">Select the patient, attach relevant reports from the report wallet, add symptoms, then run triage.</p>
 
@@ -418,7 +422,12 @@
               <button class="secondary-action" id="clearSelectedReportsButton" type="button">Clear reports</button>
             </div>
 
-            <label class="field-label" for="symptomInput">Symptoms or complaint</label>
+            <div class="symptom-label-row">
+              <label class="field-label" for="symptomInput">Symptoms or complaint</label>
+              <button class="icon-button symptom-mic-button" id="voiceButton" type="button" aria-label="Start voice input" title="Voice input">
+                <span id="micIcon">Mic</span>
+              </button>
+            </div>
             <textarea id="symptomInput" rows="7" placeholder="Example: Fever for 3 days, body pain, headache, cough...&#10;उदाहरण: तीन दिन से बुखार, खांसी, बदन दर्द..."></textarea>
 
             <div class="quick-symptoms" id="quickSymptoms" aria-label="Common symptoms"></div>
@@ -558,6 +567,21 @@
                   <option value="50">Within 50 km</option>
                 </select>
               </label>
+              <label>
+                Appointment day
+                <select id="doctorSlotDayInput">
+                  <option value="Any">Any day</option>
+                  <option value="Today">Today</option>
+                  <option value="Tomorrow">Tomorrow</option>
+                  <option value="Mon">Monday</option>
+                  <option value="Tue">Tuesday</option>
+                  <option value="Wed">Wednesday</option>
+                  <option value="Thu">Thursday</option>
+                  <option value="Fri">Friday</option>
+                  <option value="Sat">Saturday</option>
+                  <option value="Sun">Sunday</option>
+                </select>
+              </label>
               <button class="primary-action" id="searchDoctorsButton" type="button">Search doctors</button>
             </div>
             <div id="appointmentList" class="stack empty-state">Run triage to see doctor availability.</div>
@@ -613,6 +637,7 @@
             </div>
             <p class="helper-text">Select a booked patient, review intake details, add clinical notes, and request additional reports.</p>
             <div id="doctorDashboard" class="doctor-dashboard empty-state">Appointment summary appears here.</div>
+            <div id="doctorAvailabilityPanel" class="availability-panel empty-state">Availability controls appear for integrated doctors.</div>
             <div class="doctor-workspace">
               <div>
                 <h3>Booked appointments</h3>

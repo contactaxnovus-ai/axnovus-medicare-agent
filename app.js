@@ -46,6 +46,7 @@ const state = {
     city: "",
     hospital: "",
     radiusKm: 0,
+    day: "Any",
   },
   doctorSearchCount: 0,
   workspace: "patient",
@@ -133,6 +134,7 @@ function getPatientContext(refinementMode = "initial") {
   const outputLanguage = detectCareLanguage(`${symptoms} ${state.followupAnswers.map((item) => item.answer).join(" ")}`);
   return {
     personId: state.selectedPersonId,
+    patientContact: patientPhoneForPersonId(state.selectedPersonId),
     createdByRole: state.workspace,
     symptoms,
     followupAnswers: state.followupAnswers,
@@ -351,9 +353,11 @@ function setWorkspace(workspace) {
   renderReceptionPatients();
   if (workspace === "doctor") {
     renderDoctorQueue();
+    renderDoctorAvailability();
     renderPrescriptionList();
     renderMedicineOptions();
     renderDoctorHistory();
+    renderDoctorAvailability();
   }
 }
 
@@ -369,6 +373,7 @@ function ensureDefaultMember() {
     ownerUserId: state.currentUser.id,
     name: state.currentUser.name,
     relation: "Self",
+    phone: state.currentUser.phone || "",
     age: config.defaultPatient.age,
     sex: config.defaultPatient.sex,
     location: state.currentUser.city || config.defaultPatient.location,
@@ -694,8 +699,65 @@ function patientNameForPersonId(personId, data = careStore.read()) {
   return "Patient";
 }
 
+function patientPhoneForPersonId(personId, data = careStore.read()) {
+  const [type, id] = String(personId || "").split(":");
+  if (type === "member") return data.members.find((item) => item.id === id)?.phone || "";
+  if (type === "patient") return data.patients.find((item) => item.id === id)?.phone || "";
+  return "";
+}
+
 function caseHasDoctorReview(caseId, data = careStore.read()) {
   return (data.doctorInputs || []).some((item) => item.caseId === caseId) || (data.prescriptions || []).some((item) => item.caseId === caseId);
+}
+
+const appointmentDays = ["Any", "Today", "Tomorrow", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+function normalizeSlotText(value) {
+  return String(value || "")
+    .split(/[\n,]+/)
+    .map((slot) => slot.trim())
+    .filter(Boolean);
+}
+
+function withSlotDay(day, slot) {
+  if (/^(today|tomorrow|mon|tue|wed|thu|fri|sat|sun)\b/i.test(slot)) return slot;
+  return `${day} ${slot}`;
+}
+
+function currentDoctorRecord() {
+  if (state.workspace !== "doctor" || !state.currentUser) return null;
+  return appointmentService
+    .findDoctors("", { hospital: state.currentUser.hospital || "" })
+    .find((doctor) => doctor.name === state.currentUser.name);
+}
+
+function availabilityForDoctor(doctorId, day, data = careStore.read()) {
+  return (data.doctorAvailability || []).find((item) => item.doctorId === doctorId && item.day === day);
+}
+
+function slotMatchesDay(slot, day) {
+  if (!day || day === "Any") return true;
+  return String(slot || "").toLowerCase().startsWith(day.toLowerCase());
+}
+
+function slotsForDoctor(doctor, day = "Any") {
+  const data = careStore.read();
+  if (day === "Any") {
+    const knownDaySlots = appointmentDays
+      .filter((item) => item !== "Any")
+      .flatMap((item) => {
+        const availability = availabilityForDoctor(doctor.id, item, data);
+        if (availability?.closed) return [];
+        if (availability && Array.isArray(availability.slots)) return availability.slots;
+        return (doctor.slots || []).filter((slot) => slotMatchesDay(slot, item));
+      });
+    const uncategorizedSlots = (doctor.slots || []).filter((slot) => !appointmentDays.some((item) => item !== "Any" && slotMatchesDay(slot, item)));
+    return Array.from(new Set([...knownDaySlots, ...uncategorizedSlots]));
+  }
+  const availability = availabilityForDoctor(doctor.id, day);
+  if (availability?.closed) return [];
+  if (availability && Array.isArray(availability.slots)) return availability.slots;
+  return (doctor.slots || []).filter((slot) => slotMatchesDay(slot, day));
 }
 
 function unlockStages(stages) {
@@ -796,7 +858,7 @@ function renderFamilyMembers() {
       (member) => `
         <button class="case-card ${member.id === state.selectedPersonId ? "is-selected" : ""}" type="button" data-member-id="${escapeHtml(member.id)}">
           <strong>${escapeHtml(member.name)}</strong>
-          <span>${escapeHtml(member.relation || "Patient")} | ${escapeHtml(member.age || "")} ${escapeHtml(member.sex || "")}</span>
+          <span>${escapeHtml(member.relation || "Patient")} | ${escapeHtml(member.phone || "No mobile")} | ${escapeHtml(member.age || "")} ${escapeHtml(member.sex || "")}</span>
           <span>${escapeHtml(member.location || "")}</span>
         </button>
       `
@@ -817,7 +879,7 @@ function renderReceptionPatients() {
   const bookedMembers = data.members.filter((member) => bookedCasePersonIds.has(`member:${member.id}`));
   const combined = [
     ...patients.map((patient) => ({ ...patient, type: "patient" })),
-    ...bookedMembers.map((member) => ({ ...member, type: "member", phone: member.relation || "customer booking", city: member.location || "" })),
+    ...bookedMembers.map((member) => ({ ...member, type: "member", phone: member.phone || member.relation || "customer booking", city: member.location || "" })),
   ];
   if (!combined.length) {
     panel.className = "stack empty-state";
@@ -874,11 +936,12 @@ function saveFamilyMember() {
     name,
     age: Number($("#memberAgeInput").value || 0),
     sex: $("#memberSexInput").value,
+    phone: $("#memberPhoneInput").value.trim(),
     relation: $("#memberRelationInput").value.trim(),
     location: $("#memberLocationInput").value.trim() || state.currentUser?.city || config.defaultPatient.location,
   });
   selectPerson(member.id, "member");
-  ["#memberNameInput", "#memberAgeInput", "#memberRelationInput", "#memberLocationInput"].forEach((selector) => {
+  ["#memberNameInput", "#memberAgeInput", "#memberPhoneInput", "#memberRelationInput", "#memberLocationInput"].forEach((selector) => {
     const input = $(selector);
     if (input) input.value = "";
   });
@@ -1128,6 +1191,7 @@ function getDoctorFilters() {
   const cityElement = $("#doctorCityInput");
   const hospitalElement = $("#doctorHospitalInput");
   const radiusElement = $("#doctorRadiusInput");
+  const dayElement = $("#doctorSlotDayInput");
   const forcedHospital = state.workspace === "receptionist" && state.currentUser?.hospital ? state.currentUser.hospital : "";
   const hospital = forcedHospital || (hospitalElement ? hospitalElement.value : state.doctorFilters.hospital);
   const cityValue = cityElement ? cityElement.value : state.doctorFilters.city || extractCity($("#locationInput")?.value);
@@ -1137,6 +1201,7 @@ function getDoctorFilters() {
     city: appointmentService.canonicalCity(cityValue),
     hospital,
     radiusKm,
+    day: dayElement ? dayElement.value : state.doctorFilters.day || "Any",
   };
   if (filters.hospital) {
     return {
@@ -1174,6 +1239,7 @@ function setDoctorFilters(nextFilters = {}) {
     $("#doctorRadiusInput").value = lockedToHospital ? "0" : String(state.doctorFilters.radiusKm || 0);
     $("#doctorRadiusInput").disabled = lockedToHospital;
   }
+  if ($("#doctorSlotDayInput")) $("#doctorSlotDayInput").value = state.doctorFilters.day || "Any";
 }
 
 function renderDoctorSearchOptions() {
@@ -1295,7 +1361,9 @@ async function fetchGoogleDoctorResults(selectedSpecialty, filters) {
   }
 }
 
-function renderIntegratedDoctorCard(doctor) {
+function renderIntegratedDoctorCard(doctor, day = "Any") {
+  const slots = slotsForDoctor(doctor, day);
+  const slotSelectId = `slot-${doctor.id}`;
   return `
     <article class="appointment-card">
       <strong>${escapeHtml(doctor.name)}</strong>
@@ -1306,14 +1374,17 @@ function renderIntegratedDoctorCard(doctor) {
         <span>${doctor.consultationFee ? `Rs. ${doctor.consultationFee}` : "Fee not listed"}</span>
         ${doctor.distanceKm !== null && doctor.distanceKm !== undefined ? `<span>${doctor.distanceKm.toFixed(1)} km approx.</span>` : ""}
       </div>
-      <div class="slot-grid">
-        ${doctor.slots
-          .map(
-            (slot) =>
-              `<button class="slot-button" type="button" data-doctor-id="${escapeHtml(doctor.id)}" data-slot="${escapeHtml(slot)}">${escapeHtml(slot)}</button>`
-          )
-          .join("")}
-      </div>
+      ${
+        slots.length
+          ? `<div class="slot-booking-row">
+              <label for="${escapeHtml(slotSelectId)}">Available slot</label>
+              <select id="${escapeHtml(slotSelectId)}" data-slot-select="${escapeHtml(doctor.id)}">
+                ${slots.map((slot) => `<option value="${escapeHtml(slot)}">${escapeHtml(slot)}</option>`).join("")}
+              </select>
+              <button class="slot-button book-slot-button" type="button" data-doctor-id="${escapeHtml(doctor.id)}">Book</button>
+            </div>`
+          : `<div class="empty-state compact-empty">No slots available for ${escapeHtml(day || "selected day")}.</div>`
+      }
     </article>
   `;
 }
@@ -1324,7 +1395,7 @@ function renderGoogleDoctorCard(place) {
       <strong>${escapeHtml(place.name)}</strong>
       <p>${escapeHtml(place.address || "Address not available")}</p>
       <div class="doctor-meta">
-        <span>Google Maps result</span>
+        <span>External directory result</span>
         ${place.rating ? `<span>${Number(place.rating).toFixed(1)} rating</span>` : ""}
         ${place.phone ? `<span>${escapeHtml(place.phone)}</span>` : ""}
       </div>
@@ -1363,8 +1434,8 @@ async function renderAppointmentOptions() {
   panel.className = "stack";
   panel.innerHTML = `
     <div class="agent-status">
-      ${state.hasRun ? "" : "Directory search only. Run triage first to prefill the recommended specialty. "}
-      Search #${state.doctorSearchCount}: showing ${doctors.length} integrated doctor${doctors.length === 1 ? "" : "s"}${useExternalDiscovery ? ` and ${googlePlaces.length} Google Maps result${googlePlaces.length === 1 ? "" : "s"}` : ""} for ${escapeHtml(selectedSpecialty)} ${escapeHtml(searchScope)}.
+      ${state.hasRun ? "" : "Run triage first to prefill the recommended specialty. "}
+      Select an integrated doctor slot${useExternalDiscovery ? " or review external results separately" : ""}.
       ${state.workspace === "receptionist" ? "Only doctors in this hospital network are shown for receptionist booking." : ""}
       ${googleResult.configured === false ? "Google Maps API is not configured on this server." : ""}
       ${useExternalDiscovery ? `<a href="${externalSearchUrl}" target="_blank" rel="noreferrer">Open browser search</a>` : ""}
@@ -1395,34 +1466,41 @@ async function renderAppointmentOptions() {
       `
             )
             .join("")
-        : `<div class="empty-state">No matching doctors found in the local directory. Try a wider radius, another city, or open the external directory search.</div>`
+        : `<div class="empty-state">${useExternalDiscovery ? "No matching doctors found in the integrated directory. Try a wider radius, another city, or review external results." : "No matching integrated doctors or available slots found for this hospital."}</div>`
     }
   `;
 
   panel.innerHTML = `
     <div class="agent-status">
-      ${state.hasRun ? "" : "Directory search only. Run triage first to prefill the recommended specialty. "}
-      Search #${state.doctorSearchCount}: showing ${doctors.length} integrated doctor${doctors.length === 1 ? "" : "s"}${useExternalDiscovery ? ` and ${googlePlaces.length} Google Maps result${googlePlaces.length === 1 ? "" : "s"}` : ""} for ${escapeHtml(selectedSpecialty)} ${escapeHtml(searchScope)}.
+      ${state.hasRun ? "" : "Run triage first to prefill the recommended specialty. "}
+      Select an integrated doctor slot${useExternalDiscovery ? " or review external results separately" : ""}.
       ${state.workspace === "receptionist" ? "Only doctors in this hospital network are shown for receptionist booking." : ""}
       ${googleResult.configured === false ? "Google Maps API is not configured on this server." : ""}
       ${useExternalDiscovery ? `<a href="${externalSearchUrl}" target="_blank" rel="noreferrer">Open browser search</a>` : ""}
     </div>
     ${
       doctors.length
-        ? doctors.map(renderIntegratedDoctorCard).join("")
-        : `<div class="empty-state">No matching integrated doctors found. Try a wider radius, another city, or use a Google Maps result below.</div>`
+        ? doctors.map((doctor) => renderIntegratedDoctorCard(doctor, filters.day)).join("")
+        : `<div class="empty-state">${useExternalDiscovery ? "No matching integrated doctors found. Try a wider radius, another city, or review external results below." : "No matching integrated doctors or available slots found for this hospital."}</div>`
     }
   `;
 
   if (googlePlaces.length) {
     panel.insertAdjacentHTML(
       "beforeend",
-      `<div class="section-divider">Google Maps results</div>${googlePlaces.map(renderGoogleDoctorCard).join("")}`
+      `<div class="section-divider">External Results</div>${googlePlaces.map(renderGoogleDoctorCard).join("")}`
     );
   }
 
-  document.querySelectorAll(".slot-button").forEach((button) => {
-    button.addEventListener("click", () => bookAppointment(button.dataset.doctorId, button.dataset.slot));
+  document.querySelectorAll(".book-slot-button").forEach((button) => {
+    button.addEventListener("click", () => {
+      const slot = document.querySelector(`[data-slot-select="${button.dataset.doctorId}"]`)?.value || "";
+      if (!slot) {
+        setAgentStatus("Select an available slot before booking.", "warning");
+        return;
+      }
+      bookAppointment(button.dataset.doctorId, slot);
+    });
   });
 }
 
@@ -1436,6 +1514,7 @@ function bookAppointment(doctorId, slot) {
   const appointment = careStore.addAppointment({
     caseId: caseRecord.id,
     personId: state.selectedPersonId,
+    patientContact: patientPhoneForPersonId(state.selectedPersonId),
     bookedByUserId: state.currentUser?.id,
     bookedByRole: state.workspace,
     doctorId,
@@ -1519,6 +1598,71 @@ function renderDoctorQueue() {
   });
 }
 
+function renderDoctorAvailability() {
+  const panel = $("#doctorAvailabilityPanel");
+  if (!panel) return;
+  const doctor = currentDoctorRecord();
+  if (!doctor) {
+    panel.className = "availability-panel empty-state";
+    panel.textContent = "This login is not linked to an integrated doctor profile yet.";
+    return;
+  }
+
+  const selectedDay = $("#availabilityDayInput")?.value || "Today";
+  const availability = availabilityForDoctor(doctor.id, selectedDay);
+  const defaultSlots = (doctor.slots || []).filter((slot) => slotMatchesDay(slot, selectedDay));
+  panel.className = "availability-panel";
+  panel.innerHTML = `
+    <div>
+      <strong>Manage availability</strong>
+      <p>${escapeHtml(doctor.name)} · ${escapeHtml(doctor.department)} · ${escapeHtml(doctor.hospitalName)}</p>
+    </div>
+    <div class="availability-grid">
+      <label>
+        Day
+        <select id="availabilityDayInput">
+          ${appointmentDays.filter((day) => day !== "Any").map((day) => `<option value="${escapeHtml(day)}">${escapeHtml(day)}</option>`).join("")}
+        </select>
+      </label>
+      <label>
+        Slots
+        <input id="availabilitySlotsInput" type="text" placeholder="09:00, 10:30, 16:00" value="${escapeHtml((availability?.slots || defaultSlots).join(", "))}" />
+      </label>
+      <label class="checkbox-field availability-closed-field">
+        <input id="availabilityClosedInput" type="checkbox" ${availability?.closed ? "checked" : ""} />
+        No slots available
+      </label>
+      <button class="primary-action" id="saveAvailabilityButton" type="button">Save slots</button>
+    </div>
+    <p class="helper-text">Use this for weekly availability, vacations, holidays, or occasional blocked days.</p>
+  `;
+  $("#availabilityDayInput").value = selectedDay;
+  bind("#availabilityDayInput", "change", renderDoctorAvailability);
+  bind("#saveAvailabilityButton", "click", saveDoctorAvailability);
+}
+
+function saveDoctorAvailability() {
+  const doctor = currentDoctorRecord();
+  if (!doctor) {
+    setAgentStatus("This login is not linked to an integrated doctor profile.", "warning");
+    return;
+  }
+  const day = $("#availabilityDayInput")?.value || "Today";
+  const closed = Boolean($("#availabilityClosedInput")?.checked);
+  const slots = closed ? [] : normalizeSlotText($("#availabilitySlotsInput")?.value).map((slot) => withSlotDay(day, slot));
+  careStore.upsertDoctorAvailability({
+    doctorId: doctor.id,
+    doctorName: doctor.name,
+    hospitalName: doctor.hospitalName,
+    day,
+    closed,
+    slots,
+  });
+  setAgentStatus(closed ? `All ${day} slots closed for ${doctor.name}.` : `${day} slots updated for ${doctor.name}.`);
+  renderDoctorAvailability();
+  renderAppointmentOptions();
+}
+
 function selectDoctorCase(caseId) {
   state.selectedDoctorCaseId = caseId;
   const data = careStore.read();
@@ -1536,6 +1680,7 @@ function selectDoctorCase(caseId) {
   details.innerHTML = `
     <article class="case-card">
       <strong>${escapeHtml(patientNameForPersonId(caseItem.personId, data))} · ${escapeHtml(caseItem.route)}</strong>
+      <p><strong>Contact:</strong> ${escapeHtml(caseItem.patientContext?.patientContact || patientPhoneForPersonId(caseItem.personId, data) || "Not captured")}</p>
       <p><strong>Symptoms:</strong> ${escapeHtml(caseItem.patientContext?.symptoms || "")}</p>
       <p><strong>Reports:</strong> ${escapeHtml(reportService.summarize(caseItem.reports || []))}</p>
       <p><strong>Follow-up answers:</strong> ${escapeHtml((caseItem.followupAnswers || []).map((item) => `${item.question}: ${item.answer}`).join(" | ") || "None")}</p>
@@ -2165,6 +2310,10 @@ function bootApp() {
       }
       setDoctorFilters({ ...getDoctorFilters(), hospital: "", radiusKm: Number($("#doctorRadiusInput").value || 0) });
       renderDoctorSearchOptions();
+    });
+    bind("#doctorSlotDayInput", "change", async () => {
+      setDoctorFilters(getDoctorFilters());
+      await renderAppointmentOptions();
     });
     bind("#selectAllReportsButton", "click", () => setAllReportsSelected(true));
     bind("#clearSelectedReportsButton", "click", () => setAllReportsSelected(false));

@@ -7,6 +7,7 @@ window.createCareDataStore = function createCareDataStore(storageKey = "axnovus-
     members: [],
     patients: [],
     reports: [],
+    doctorAvailability: [],
   };
 
   function read() {
@@ -107,6 +108,20 @@ window.createCareDataStore = function createCareDataStore(storageKey = "axnovus-
     return record;
   }
 
+  function upsertDoctorAvailability(availability) {
+    const data = read();
+    const existingIndex = data.doctorAvailability.findIndex((item) => item.doctorId === availability.doctorId && item.day === availability.day);
+    const record = {
+      ...availability,
+      id: availability.id || data.doctorAvailability[existingIndex]?.id || id("avail"),
+      updatedAt: new Date().toISOString(),
+    };
+    if (existingIndex >= 0) data.doctorAvailability[existingIndex] = record;
+    else data.doctorAvailability.unshift(record);
+    write(data);
+    return record;
+  }
+
   return {
     read,
     upsertCase,
@@ -116,5 +131,6 @@ window.createCareDataStore = function createCareDataStore(storageKey = "axnovus-
     addDoctorInput,
     addReports,
     addPrescription,
+    upsertDoctorAvailability,
   };
 };
